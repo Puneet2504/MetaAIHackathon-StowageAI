@@ -1,0 +1,110 @@
+/* Palette: chart-room blues with grade colours as the only saturated hues.
+   Pass and fail colours are reserved for verdicts. */
+:root {
+  color-scheme: light;
+  --paper: #e8eef2;
+  --panel: #f7fafb;
+  --ink: #0f2a3d;
+  --muted: #536676;
+  --line: #b9c7d1;
+  --hull: #24465e;
+  --pass: #2c6e49;
+  --fail: #a4231b;
+  --focus: #1f6fb2;
+  --g-ulsd: #c98a16;
+  --g-jet: #2f6db0;
+  --g-gasoline: #8b3c87;
+  --g-naphtha: #1d8585;
+  --body: "Barlow", "Segoe UI", system-ui, sans-serif;
+  --display: "Barlow Semi Condensed", "Arial Narrow", "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --paper: #0d1c27;
+    --panel: #13283a;
+    --ink: #e2ebf1;
+    --muted: #9db0bf;
+    --line: #2f4a5f;
+    --hull: #8fb3cc;
+    --pass: #6cc08f;
+    --fail: #f0857c;
+    --focus: #7fb6e6;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.5 var(--body); }
+h1, h2 { font-family: var(--display); font-weight: 600; margin: 0; }
+h1 { font-size: 2rem; line-height: 1.15; letter-spacing: -0.01em; }
+h2 { font-size: 1.25rem; margin-bottom: 0.75rem; }
+p { margin: 0.25rem 0; }
+button, select, input, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+.shell { max-width: 1200px; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
+.masthead { display: flex; flex-wrap: wrap; gap: 1rem; justify-content: space-between; align-items: flex-end; margin-bottom: 1rem; }
+.badge { border: 1px solid var(--line); border-radius: 4px; padding: 0.25rem 0.6rem; font-size: 0.875rem; color: var(--muted); }
+.muted { color: var(--muted); }
+.small { font-size: 0.875rem; }
+.error { color: var(--fail); font-weight: 500; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+/* The tank plan is the one bold element on the page. */
+.plan { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 0.75rem; margin-bottom: 1.5rem; overflow-x: auto; }
+.hull { width: 100%; min-width: 560px; display: block; }
+.hull-outline { fill: none; stroke: var(--hull); stroke-width: 2.5; }
+.tank-shell { fill: var(--paper); stroke: var(--line); stroke-width: 1; }
+.tank.ballast .tank-shell { fill: var(--line); opacity: 0.45; }
+.tank.cargo { cursor: pointer; }
+.tank.cargo:hover .tank-shell, .tank.selected .tank-shell { stroke: var(--ink); stroke-width: 2.5; }
+.tank-id { font: 600 13px var(--display); fill: var(--ink); text-anchor: middle; pointer-events: none; }
+.tank-fill { font: 12px var(--body); fill: var(--ink); text-anchor: middle; pointer-events: none; }
+.axis-note { font: 12px var(--body); fill: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; list-style: none; padding: 0; margin: 0.5rem 0 0; font-size: 0.9rem; }
+.swatch { display: inline-block; width: 0.85rem; height: 0.85rem; border-radius: 2px; margin-right: 0.4rem; vertical-align: -1px; }
+
+.columns { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 2rem; }
+@media (max-width: 860px) { .columns { grid-template-columns: 1fr; } }
+.row-between { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: space-between; align-items: baseline; }
+.presets { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+
+button { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 0.4rem 0.8rem; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--ink); }
+button:disabled { opacity: 0.55; cursor: progress; }
+button.primary { background: var(--hull); color: var(--paper); border-color: var(--hull); font-weight: 600; margin-top: 0.75rem; }
+
+.table-wrap { overflow-x: auto; margin: 0.5rem 0; }
+table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
+th { text-align: left; font-family: var(--display); font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--line); padding: 0.35rem 0.5rem; }
+td { padding: 0.25rem 0.5rem; border-bottom: 1px solid var(--line); }
+tr.selected td { background: var(--panel); }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+select, input[type="number"] { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 0.2rem 0.35rem; }
+input[type="number"] { width: 4.5rem; }
+
+.verdict { font-family: var(--display); font-size: 1.6rem; font-weight: 700; margin-bottom: 0.75rem; }
+.verdict.pass { color: var(--pass); }
+.verdict.fail { color: var(--fail); }
+.figures { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.5rem 1rem; margin: 0 0 1rem; }
+.figures dt { font-size: 0.8rem; color: var(--muted); }
+.figures dd { margin: 0; font-family: var(--display); font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+
+.gz { width: 100%; max-width: 420px; display: block; margin-bottom: 0.75rem; }
+.gz-axis { stroke: var(--line); }
+.gz-req { stroke: var(--muted); stroke-dasharray: 4 4; }
+.gz-line { fill: none; stroke: var(--hull); stroke-width: 2.5; }
+.gz-label { font: 11px var(--body); fill: var(--muted); }
+
+.criteria, .warnings { list-style: none; padding: 0; margin: 0 0 1rem; font-size: 0.95rem; }
+.criteria li { padding: 0.2rem 0; }
+.criteria li span { display: inline-block; width: 2.6rem; font-weight: 600; }
+.criteria li.pass span { color: var(--pass); }
+.criteria li.fail { color: var(--fail); }
+.warnings li { border-left: 3px solid var(--fail); padding-left: 0.6rem; margin: 0.3rem 0; }
+.explanation { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 0.75rem 1rem; margin-top: 0.75rem; max-width: 70ch; }
+
+.order { margin-top: 2.5rem; max-width: 760px; }
+textarea { width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 0.5rem; margin: 0.5rem 0; resize: vertical; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
