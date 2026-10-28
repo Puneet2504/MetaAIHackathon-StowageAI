@@ -1,0 +1,459 @@
+import { useEffect, useMemo, useState } from "react";
+import { api } from "./api";
+import { addGrade, allGrades, gradeById } from "./grades";
+import HullPlan, { type TankState } from "./HullPlan";
+import Icon from "./Icons";
+import StabilityPanel, { Explanation } from "./StabilityPanel";
+import type { VesselModel } from "./types/vessel-model";
+import type { ApprovedPlanSummary, MemoryItem, Parcel, PlanResponse, StabilityResult, StowageConstraints,
+  TankLoad } from "./types/api";
+
+// Fixed bunkers and fresh water for the demo condition; only those tanks the ship has are used.
+// The solver uses the same values on the server (app/stowage/solver.py).
+const FIXED: TankLoad[] = [
+  { tank_id: "FOP", volume_m3: 300, density_t_m3: 0.95, grade: "Fuel oil" },
+  { tank_id: "FOS", volume_m3: 300, density_t_m3: 0.95, grade: "Fuel oil" },
+  { tank_id: "FW", volume_m3: 200, density_t_m3: 1.0, grade: "Fresh water" },
+];
+const SAMPLE_ORDER =
+  "Load Rotterdam: 20,000 mt ULSD, 12,000 mt Jet A-1. Discharge ULSD at Le Havre, Jet at Bilbao.";
+// The sample order already read into parcels, so the solver can be shown without a model.
+const SAMPLE_PARCELS: Parcel[] = [
+  { grade: "ULSD", quantity_t: 20000, quantity_m3: null, density_t_m3: null, load_port: "Rotterdam", discharge_port: "Le Havre" },
+  { grade: "Jet A-1", quantity_t: 12000, quantity_m3: null, density_t_m3: null, load_port: "Rotterdam", discharge_port: "Bilbao" },
+];
+const NO_CONSTRAINTS: StowageConstraints = { empty_tanks: [], fixed_grades: {}, max_trim_m: null };
+const STATUS_TEXT: Record<string, string> = {
+  planned: "Plan ready", partial: "Plan ready, cargo left over", fails_criteria: "No passing plan found",
+  cannot_segregate: "Cannot segregate these grades", nothing_to_plan: "Nothing to plan",
+};
+
+type Preset = "full" | "mixed" | "starboard" | "clear";
+type StepState = "todo" | "active" | "done" | "failed";
+
+// Where the one-click pipeline has got to: read → allocate → check → explain → approve.
+function steps(planning: boolean, error: string | null, r: PlanResponse | null, approved: string | null) {
+  const s: [string, string, StepState][] = [
+    ["order", "Read order", "todo"], ["allocate", "Allocate", "todo"], ["gauge", "Check stability", "todo"],
+    ["sparkle", "Explain", "todo"], ["approve", "Approve", "todo"],
+  ];
+  if (planning) { s[0][2] = "active"; return s; }
+  if (error && !r) { s[0][2] = "failed"; return s; }
+  if (!r) return s;
+  const p = r.plan;
+  s[0][2] = "done";
+  s[1][2] = p.allocation.length ? "done" : "failed";
+  s[2][2] = !p.result ? "todo" : p.status === "fails_criteria" ? "failed" : "done";
+  s[3][2] = r.explanation ? "done" : "todo";
+  s[4][2] = approved ? "done" : p.result && p.status !== "fails_criteria" ? "active" : "todo";
+  return s;
+}
+
+function Stepper({ steps: list }: { steps: [string, string, StepState][] }) {
+  return (
+    <ol className="stepper" aria-label="Planning steps">
+      {list.map(([icon, label, state]) => (
+        <li key={label} className={`step ${state}`} aria-current={state === "active" ? "step" : undefined}>
+          <span className="step-dot"><Icon name={state === "failed" ? "cross" : state === "done" ? "approve" : icon} size={16} /></span>
+          <span className="step-label">{label}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+interface Props {
+  vesselId: string;
+  onBack: () => void;
+  onOpenVoyages: () => void;
+  onOpenVoyage: (id: string) => void;
+  initialOrder?: string;
+}
+
+export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage, initialOrder }: Props) {
+  const [vessel, setVessel] = useState<VesselModel | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [state, setState] = useState<Record<string, TankState>>({});
+  const [selected, setSelected] = useState<string | null>(null);
+  const [result, setResult] = useState<StabilityResult | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [checkError, setCheckError] = useState<string | null>(null);
+  const [explanation, setExplanation] = useState<string | null>(null);
+  const [explanationSource, setExplanationSource] = useState<"ai" | "plain">("ai");
+  const [explaining, setExplaining] = useState(false);
+  const [order, setOrder] = useState(initialOrder ?? SAMPLE_ORDER);
+  const [memoryOff, setMemoryOff] = useState<string[]>([]);
+  const [plan, setPlan] = useState<PlanResponse | null>(null);
+  const [planning, setPlanning] = useState(false);
+  const [planError, setPlanError] = useState<string | null>(null);
+  const [instruction, setInstruction] = useState("");
+  const [approved, setApproved] = useState<string | null>(null);
+  const [history, setHistory] = useState<ApprovedPlanSummary[]>([]);
+
+  useEffect(() => {
+    api.vessel(vesselId)
+      .then(setVessel)
+      .catch((e) => setLoadError(`Couldn't load the vessel. Is the backend running on port 8000? (${e.message})`));
+    api.listPlans(vesselId).then(setHistory).catch(() => setHistory([]));
+  }, [vesselId]);
+
+  const cargoTanks = useMemo(
+    () => (vessel?.tanks ?? []).filter((t) => t.type === "cargo" || t.type === "slop"),
+    [vessel]
+  );
+  const fixed = useMemo(
+    () => FIXED.filter((f) => vessel?.tanks.some((t) => t.id === f.tank_id)),
+    [vessel]
+  );
+
+  const applyPreset = (p: Preset) => {
+    const next: Record<string, TankState> = {};
+    cargoTanks.forEach((t) => {
+      const no = Number(t.id.replace(/\D/g, "")) || 0;
+      if (t.type === "slop" || p === "clear") next[t.id] = { grade: null, fillPct: 0 };
+      else if (p === "full") next[t.id] = { grade: "ULSD", fillPct: 98 };
+      else if (p === "mixed") next[t.id] = { grade: no <= 2 ? "JET" : no <= 4 ? "ULSD" : "GASOLINE", fillPct: 98 };
+      else next[t.id] = t.side === "S" ? { grade: "ULSD", fillPct: 98 } : { grade: null, fillPct: 0 };
+    });
+    setState(next);
+    setResult(null);
+    setExplanation(null);
+    setPlan(null);
+  };
+
+  useEffect(() => { if (vessel) applyPreset("clear"); }, [vessel]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const update = (id: string, patch: Partial<TankState>) => {
+    setState((s) => ({ ...s, [id]: { ...s[id], ...patch } }));
+    setResult(null);
+    setExplanation(null);
+    setPlan(null); // a manual change means the AI plan no longer applies
+  };
+
+  const buildLoads = (): TankLoad[] => {
+    const loads: TankLoad[] = [];
+    cargoTanks.forEach((t) => {
+      const s = state[t.id];
+      const g = gradeById(s?.grade ?? null);
+      if (!g || !s.fillPct) return;
+      loads.push({ tank_id: t.id, volume_m3: (t.capacity100 * s.fillPct) / 100, density_t_m3: g.density, grade: g.id });
+    });
+    return [...loads, ...fixed];
+  };
+
+  const totals = useMemo(() => {
+    const byGrade: Record<string, number> = {};
+    cargoTanks.forEach((t) => {
+      const s = state[t.id];
+      const g = gradeById(s?.grade ?? null);
+      if (g && s.fillPct) byGrade[g.id] = (byGrade[g.id] ?? 0) + (t.capacity100 * s.fillPct / 100) * g.density;
+    });
+    return byGrade;
+  }, [state, cargoTanks]);
+
+  // Show a plan from the solver: tank states, stability result and explanation.
+  const showPlan = (r: PlanResponse) => {
+    setPlan(r);
+    setApproved(null);
+    r.plan.allocation.forEach((a) => addGrade(a.grade_id, a.grade, a.density_t_m3));
+    const next: Record<string, TankState> = {};
+    cargoTanks.forEach((t) => { next[t.id] = { grade: null, fillPct: 0 }; });
+    r.plan.loads.forEach((l) => {
+      const t = cargoTanks.find((c) => c.id === l.tank_id);
+      if (t) next[t.id] = { grade: l.grade ?? null, fillPct: Math.round((1000 * l.volume_m3) / t.capacity100) / 10 };
+    });
+    setState(next);
+    setResult(r.plan.result);
+    setExplanation(r.explanation);
+    setExplanationSource(r.explanation_source);
+    setCheckError(null);
+  };
+
+  const runPlan = async (opts: { parcels?: Parcel[]; instructions?: string; memoryOff?: string[] } = {}) => {
+    setPlanning(true); setPlanError(null);
+    try {
+      showPlan(await api.planVoyage({
+        vessel_id: vesselId,
+        order_text: opts.parcels ? undefined : order,
+        parcels: opts.parcels ?? (opts.instructions || opts.memoryOff ? plan?.parcels : undefined),
+        instructions: opts.instructions,
+        constraints: plan?.constraints ?? NO_CONSTRAINTS,
+        memory_off: opts.memoryOff ?? memoryOff,
+      }));
+      setInstruction("");
+    } catch (e) { setPlanError((e as Error).message); }
+    finally { setPlanning(false); }
+  };
+
+  const approve = async () => {
+    if (!plan) return;
+    try {
+      const r = await api.approvePlan({ vessel_id: vesselId, order_text: order, parcels: plan.parcels,
+        constraints: plan.applied_constraints, plan: plan.plan, explanation: plan.explanation });
+      setApproved(r.id);
+      api.listPlans(vesselId).then(setHistory).catch(() => {});
+    } catch (e) { setPlanError((e as Error).message); }
+  };
+
+  const reject = () => { setPlan(null); setApproved(null); applyPreset("clear"); };
+
+  const runCheck = async () => {
+    setChecking(true); setCheckError(null); setExplanation(null);
+    try { setResult(await api.check(vesselId, buildLoads())); }
+    catch (e) { setResult(null); setCheckError((e as Error).message); }
+    finally { setChecking(false); }
+  };
+
+  const runExplain = async () => {
+    if (!result) return;
+    setExplaining(true);
+    try { const r = await api.explain(result); setExplanation(r.explanation); setExplanationSource(r.source); }
+    catch (e) { setExplanation(`Explanation unavailable: ${(e as Error).message}`); }
+    finally { setExplaining(false); }
+  };
+
+  if (loadError) return <><p className="error">{loadError}</p><button onClick={onBack}>Back to ships</button></>;
+  if (!vessel) return <p className="muted">Loading vessel…</p>;
+
+  const p = plan?.plan;
+  const c = plan?.applied_constraints;
+  // Remembered rules: the ones used in this plan, plus any switched off for it.
+  const memoryChips: MemoryItem[] = plan ? plan.memory_used : [];
+  const toggleMemory = (id: string) => {
+    const next = memoryOff.includes(id) ? memoryOff.filter((x) => x !== id) : [...memoryOff, id];
+    setMemoryOff(next);
+    if (plan) runPlan({ memoryOff: next });
+  };
+  const hasConstraints = !!c && (c.empty_tanks.length > 0 || Object.keys(c.fixed_grades).length > 0 || c.max_trim_m !== null);
+  const modelMissing = planError?.includes("No model configured");
+
+  return (
+    <>
+      <header className="masthead">
+        <div>
+          <button className="link" onClick={onBack}>← All ships</button>
+          <h1>{vessel.particulars.name}</h1>
+          <div className="chips">
+            <span className="class-badge">{vessel.particulars.sizeClass}</span>
+            <span className="chip">LBP {vessel.particulars.lbp} m</span>
+            <span className="chip">Breadth {vessel.particulars.breadth} m</span>
+            <span className="chip">Summer draught {vessel.particulars.summerDraught} m</span>
+          </div>
+        </div>
+        <p className="badge" title={vessel.source.notes}>
+          {vessel.source.origin === "user_drawing" ? "Estimated hydrostatics." : "Synthetic demo data."} Not for real loading decisions.
+        </p>
+      </header>
+
+      <section className="voyage card" aria-labelledby="voyage-h">
+        <div className="row-between">
+          <h2 id="voyage-h">Voyage plan</h2>
+          <Stepper steps={steps(planning, planError, plan, approved)} />
+        </div>
+        <p className="muted small">
+          Paste the charterer's order. The AI reads it, the solver places every parcel within the cargo lines and
+          fill limits, and the stability engine checks each candidate. You approve the result.
+        </p>
+        <textarea value={order} onChange={(e) => setOrder(e.target.value)} rows={3} aria-label="Voyage order text" />
+        <button className="primary" onClick={() => runPlan()} disabled={planning || order.trim().length < 10}>
+          <Icon name="sparkle" size={18} /> {planning ? "Planning…" : "Plan this voyage"}
+        </button>
+        {planError && <p className="error">{planError}</p>}
+        {plan && (memoryChips.length > 0 || memoryOff.length > 0) && (
+          <div className="memory-row">
+            <span className="small muted"><Icon name="memory" size={14} /> Using memory:</span>
+            {memoryChips.map((m) => (
+              <button key={m.id} className="memory-chip on" onClick={() => toggleMemory(m.id)}
+                title="Remembered rule. Click to leave it out of this plan.">{m.text} <Icon name="cross" size={12} /></button>
+            ))}
+            {memoryOff.map((id) => (
+              <button key={id} className="memory-chip" onClick={() => toggleMemory(id)} title="Switched off for this plan. Click to use it again.">
+                Rule switched off <Icon name="plus" size={12} />
+              </button>
+            ))}
+          </div>
+        )}
+        {plan && (plan.remembered.length > 0 || plan.forgotten.length > 0) && (
+          <p className="memory-toast" role="status">
+            <Icon name="memory" size={16} />
+            {plan.remembered.length > 0 && <>Remembered for next time: {plan.remembered.map((m) => m.text).join("; ")}. </>}
+            {plan.forgotten.length > 0 && <>Forgotten: {plan.forgotten.map((m) => m.text).join("; ")}.</>}
+          </p>
+        )}
+        {modelMissing && (
+          <p className="small">
+            <button className="link" onClick={() => runPlan({ parcels: SAMPLE_PARCELS })}>Plan the sample order without AI</button>
+            {" "}(uses the sample order already read into parcels).
+          </p>
+        )}
+      </section>
+
+      <section className="plan card" aria-labelledby="plan-h">
+        <h2 id="plan-h" className="visually-hidden">Tank plan</h2>
+        <HullPlan vessel={vessel} state={state} selected={selected} onSelect={setSelected} />
+        <ul className="legend">
+          {allGrades().map((g) => (
+            <li key={g.id}><span className="swatch" style={{ background: g.color }} />{g.name}
+              {totals[g.id] ? <strong> {Math.round(totals[g.id]).toLocaleString()} t</strong> : null}
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <div className="columns">
+        <section className="card" aria-labelledby="alloc-h">
+          {p ? (
+            <>
+              <h2 id="alloc-h">{STATUS_TEXT[p.status] ?? p.status}</h2>
+              <p>{p.message}</p>
+              {p.candidates_checked > 0 && (
+                <p className="muted small">Checked {p.candidates_checked} of {p.candidates_total} candidate allocations with the stability engine.</p>
+              )}
+              {p.allocation.length > 0 && (
+                <div className="table-wrap">
+                  <table>
+                    <thead><tr><th>Grade</th><th>Lines</th><th>Tanks</th><th className="num">m³</th></tr></thead>
+                    <tbody>
+                      {p.allocation.map((a) => (
+                        <tr key={a.parcel}>
+                          <td><span className="swatch" style={{ background: gradeById(a.grade_id)?.color }} />{a.grade}</td>
+                          <td>{a.lines.join(", ")}</td>
+                          <td>{a.tanks.join(", ")}</td>
+                          <td className="num">
+                            {Math.round(a.allocated_m3).toLocaleString()}
+                            {a.unallocated_m3 > 0.5 && <span className="error"> ({Math.round(a.unallocated_m3).toLocaleString()} left over)</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {hasConstraints && c && (
+                <p className="muted small">
+                  Constraints: {[
+                    c.empty_tanks.length ? `empty ${c.empty_tanks.join(", ")}` : "",
+                    ...Object.entries(c.fixed_grades).map(([t, g]) => `${t} carries ${g}`),
+                    c.max_trim_m !== null ? `trim at most ${c.max_trim_m} m` : "",
+                  ].filter(Boolean).join("; ")}
+                </p>
+              )}
+              {[...plan!.parcel_notes, ...p.warnings].length > 0 && (
+                <ul className="warnings">{[...plan!.parcel_notes, ...p.warnings].map((w) => <li key={w}>{w}</li>)}</ul>
+              )}
+              {approved
+                ? (
+                  <div className="approved-box">
+                    <p className="verdict pass"><Icon name="approve" size={20} /> Approved and saved as a voyage.</p>
+                    <button className="primary small-btn" onClick={() => onOpenVoyage(approved)}>View in Voyages</button>
+                  </div>
+                )
+                : (
+                  <div className="approve">
+                    <div className="presets">
+                      <button className="primary" onClick={approve} disabled={!p.result || p.status === "fails_criteria"}>Approve plan</button>
+                      <button onClick={reject}>Reject</button>
+                    </div>
+                    <form className="changes" onSubmit={(e) => { e.preventDefault(); if (instruction.trim()) runPlan({ instructions: instruction }); }}>
+                      <input aria-label="Ask for changes" value={instruction} onChange={(e) => setInstruction(e.target.value)}
+                        placeholder="Ask for changes, e.g. keep tank 3 empty (add 'always' to remember it)" />
+                      <button type="submit" disabled={planning || !instruction.trim()}>Replan</button>
+                    </form>
+                  </div>
+                )}
+            </>
+          ) : (
+            <>
+              <h2 id="alloc-h">Allocation</h2>
+              <p className="muted">Plan a voyage to see where each grade goes.</p>
+            </>
+          )}
+
+          <details className="manual">
+            <summary>Adjust manually</summary>
+            <div className="row-between">
+              <span className="muted small">Changing a tank here replaces the AI plan with your own condition.</span>
+              <div className="presets" role="group" aria-label="Example conditions">
+                <button onClick={() => applyPreset("mixed")}>Three grades</button>
+                <button onClick={() => applyPreset("full")}>Full diesel</button>
+                <button onClick={() => applyPreset("starboard")}>Starboard only</button>
+                <button onClick={() => applyPreset("clear")}>Clear</button>
+              </div>
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Tank</th><th>Grade</th><th>Fill %</th><th className="num">m³</th></tr></thead>
+                <tbody>
+                  {cargoTanks.map((t) => {
+                    const s = state[t.id] ?? { grade: null, fillPct: 0 };
+                    return (
+                      <tr key={t.id} className={selected === t.id ? "selected" : ""} onClick={() => setSelected(t.id)}>
+                        <td>{t.id}</td>
+                        <td>
+                          <select aria-label={`Grade in ${t.id}`} value={s.grade ?? ""}
+                            onChange={(e) => update(t.id, { grade: e.target.value || null, fillPct: e.target.value ? (s.fillPct || 98) : 0 })}>
+                            <option value="">Empty</option>
+                            {allGrades().map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                          </select>
+                        </td>
+                        <td>
+                          <input aria-label={`Fill percentage of ${t.id}`} type="number" min={0} max={100} step={1}
+                            value={s.fillPct} disabled={!s.grade}
+                            onChange={(e) => update(t.id, { fillPct: Math.max(0, Math.min(100, Number(e.target.value))) })} />
+                        </td>
+                        <td className="num">{Math.round(t.capacity100 * s.fillPct / 100).toLocaleString()}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <p className="muted small">
+              {fixed.length
+                ? `Bunkers and fresh water are fixed for the demo: ${fixed.map((f) => `${f.tank_id} ${f.volume_m3} m³`).join(", ")}.`
+                : "This ship has no standard bunker or fresh water tanks, so none are included."}
+            </p>
+            <button className="primary" onClick={runCheck} disabled={checking}>
+              {checking ? "Checking…" : "Check stability"}
+            </button>
+            {checkError && <p className="error">{checkError}</p>}
+          </details>
+
+          {history.length > 0 && (
+            <details className="manual">
+              <summary>Approved voyages for this ship ({history.length})</summary>
+              <ul className="history">
+                {history.map((h) => (
+                  <li key={h.id}>
+                    <button className="link" onClick={() => onOpenVoyage(h.id)}>{new Date(h.approved_at).toLocaleString()}</button>
+                    : {h.grades.join(", ")}
+                  </li>
+                ))}
+              </ul>
+              <button className="link" onClick={onOpenVoyages}>All voyages →</button>
+            </details>
+          )}
+        </section>
+
+        <section className="card" aria-labelledby="result-h" aria-live="polite">
+          <h2 id="result-h">Stability</h2>
+          {!result && !checkError && <p className="muted">Plan a voyage, or adjust the tanks manually and check stability.</p>}
+          {result && (
+            <>
+              <StabilityPanel result={result} />
+              {!plan && result.warnings.length > 0 && (
+                <ul className="warnings">{result.warnings.map((w) => <li key={w}>{w}</li>)}</ul>
+              )}
+              {!explanation && (
+                <button onClick={runExplain} disabled={explaining}>
+                  <Icon name="sparkle" size={16} /> {explaining ? "Explaining…" : "Explain in plain words"}
+                </button>
+              )}
+              {explanation && <Explanation text={explanation} source={explanationSource} />}
+            </>
+          )}
+        </section>
+      </div>
+    </>
+  );
+}

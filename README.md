@@ -73,6 +73,32 @@ MODEL_NAME=...
 
 `app/llm/client.py` sends a chat-completions style request to `{MODEL_BASE_URL}/chat/completions`. Check your provider's documentation and adjust `_post()` if its request format differs. Never commit `.env`.
 
+## Demo login
+
+The backend creates a demo account when it starts, with a fictional ship and an approved sample plan already in its workspace:
+
+- Email: `demo@stowage-ai.example`
+- Password: `DemoFjord-2026`
+
+These are demo-only credentials for synthetic data (set by `DEMO_USER_EMAIL` and `DEMO_USER_PASSWORD` in `backend\.env`). Anyone else can sign in with their own email: a new email creates a new account after the password is confirmed.
+
+## Workspaces and your own ships
+
+Sign in with email and password. Passwords are hashed (scrypt); sign-in tokens are signed with `SECRET_KEY` (generated into `backend/data/users/.secret` if you leave it empty). Each account has its own ships and approved plans, stored in `backend/data/users/<account id>/` (gitignored).
+
+Select **New ship**, then paste a tank table or description, or add/paste a drawing image, and select **Read with AI**. The AI returns only a layout (dimensions, tank extents, sides, capacities). You can edit it, and a live tank plan preview shows what will be saved. `app/vessel_builder.py` then builds the hydrostatics, cross curves and sounding tables from simplified formulas, so a user ship is an estimate, like the demo. **Start from demo layout** works without a model.
+
+Models (in `backend\.env`):
+
+```
+READER_MODEL_NAME=...   # multimodal reader, e.g. Muse Spark or Muse Wonder (empty = MODEL_NAME)
+SEGMENT_MODEL_NAME=...  # SAM 3.1: segments hull and tanks in images; boxes are sent to the reader as hints
+SEGMENT_BASE_URL=...    # empty = MODEL_BASE_URL
+IMAGE_MODEL_NAME=...    # Muse Image, reserved for vessel sketches (not used yet)
+```
+
+The SAM request shape in `app/llm/segment.py` is an assumption; check it against the Meta Model API docs. Before sending any drawing to a hosted model, confirm the endpoint's data region meets your data-residency policy.
+
 ## What works now
 
 - Synthetic MR2 vessel with 12 cargo tanks, 2 slop tanks, ballast, bunkers and constants
@@ -81,16 +107,43 @@ MODEL_NAME=...
 - Sequence endpoint that checks every stage of a loading plan
 - Web app: tank plan, grade and fill entry, example conditions, stability result, GZ curve
 - AI endpoints for reading voyage orders and explaining results (need a model in `.env`)
+- **Plan this voyage**: the AI reads the order, `app/stowage/solver.py` allocates parcels to tanks (one grade per cargo line, P/S pairs, fill limits, planner constraints), the engine checks every candidate and the best is kept; the AI explains it and the planner approves, rejects or asks for changes in plain words. Approved plans are saved per user.
 
 ## Roadmap for the 10 days
 
 1. Connect the Meta model and test order parsing and explanations
-2. Stowage solver: allocate parcels to tanks, respecting lines, pumps and segregation
+2. Stowage solver: first version done (lines, segregation, fill limits); next: discharge rotation, ballast, sequence
 3. Loading sequence view with a stage slider
 4. Shear force and bending moment checks
 5. Weather module (Open-Meteo marine forecast) with recommended speed and ETA range
 6. Vessel sketch from Muse Image; read capacity plans from images
 7. Deploy, record the demo video, write the submission
+
+## Voyages and memory
+
+- **Voyages tab:** every plan you approve is kept with its route, cargo, tank plan, stability check and plain-language explanation. Open one to see it, plan it again, or delete it.
+- **Memory tab:** the assistant remembers standing instructions you give it, and only those. Start a change request with "always", "from now on" or "remember", e.g. "always keep tank 3 empty on this ship" or "remember GO 10 means ULSD". Say "forget the tank 3 rule" to remove one. Remembered tank and trim rules are applied by code before planning, so they cost no tokens; you can switch one off for a single plan from the chips under "Voyage plan". Everything remembered can be edited or deleted on the Memory page, which also shows your AI token usage.
+
+## Keeping token use low
+
+- Short prompts with one worked example each, and compact summaries of results (no GZ curves or tank tables) sent to the model.
+- `REASONING_EFFORT` (default `minimal`) and `REASONING_EFFORT_DRAWING` (default `low`) limit the model's hidden reasoning, which was most of the output tokens. `MAX_TOKENS_*` are safety caps.
+- Repeat requests are answered from a local cache (`backend/data/cache/`, gitignored), and common instructions ("keep tank 4 empty", "trim under 1 m", "diesel in 1P/S") are handled by code with no model call.
+- Explanations work without a model too: a built-in plain-language summary is used when the model is unavailable.
+
+## Evaluating the model
+
+The app calls the Meta Model API directly; nothing is fine-tuned. Model answers are validated, and a reply that fails validation is sent back once for correction (`chat_model` in `app/llm/client.py`). Set `MODEL_JSON_MODE=true` in `.env` if your provider supports `response_format: json_object`.
+
+`backend/evals/` holds a synthetic test set: voyage orders, drawing texts and planner instructions, each with its expected answer. Run it from the `backend` folder:
+
+```
+.\.venv\Scripts\python.exe -m evals.run_evals --dry-run          # check the cases and scorer, no model
+.\.venv\Scripts\python.exe -m evals.run_evals                    # the configured model
+.\.venv\Scripts\python.exe -m evals.run_evals --model <name>     # compare, e.g. Muse Spark vs Muse Wonder
+```
+
+Each run prints pass/fail per case and writes a report to `evals/results/` (gitignored). When the model gets a new kind of order wrong, first add a synthetic case for it, then change the prompt in `app/llm/prompts.py` and re-run. Keep the prompt's worked examples out of the test set.
 
 ## Tests
 

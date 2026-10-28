@@ -14,4 +14,13 @@ export const GRADES: Grade[] = [
   { id: "NAPHTHA", name: "Naphtha", density: 0.7, color: "var(--g-naphtha)" },
 ];
 
-export const gradeById = (id: string | null) => GRADES.find((g) => g.id === id);
+// Grades an order brings in that are not in the library; shown in a neutral colour.
+const extra: Grade[] = [];
+
+export const addGrade = (id: string, name: string, density: number) => {
+  if (!GRADES.concat(extra).some((g) => g.id === id)) extra.push({ id, name, density, color: "var(--g-other)" });
+};
+
+export const allGrades = () => GRADES.concat(extra);
+
+export const gradeById = (id: string | null) => allGrades().find((g) => g.id === id);

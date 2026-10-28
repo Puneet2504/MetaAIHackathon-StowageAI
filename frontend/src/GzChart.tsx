@@ -18,6 +18,7 @@ export default function GzChart({ angles, gz }: Props) {
       <line x1={L} x2={L} y1={T} y2={H - B} className="gz-axis" />
       <line x1={x(30)} x2={W - R} y1={y(0.2)} y2={y(0.2)} className="gz-req" />
       <text x={W - R} y={y(0.2) - 4} textAnchor="end" className="gz-label">GZ 0.20 m from 30°</text>
+      <polygon points={`${x(angles[0])},${y(0)} ${pts} ${x(maxA)},${y(0)}`} className="gz-area" />
       <polyline points={pts} className="gz-line" />
       {ticks.map((a) => (
         <text key={a} x={x(a)} y={H - 10} textAnchor="middle" className="gz-label">{a}°</text>

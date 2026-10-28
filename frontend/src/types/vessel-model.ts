@@ -6,7 +6,7 @@
 export interface VesselModel {
   id: string;
   schemaVersion: "1.0";
-  source: { origin: "synthetic" | "stability_booklet"; notes?: string };
+  source: { origin: "synthetic" | "stability_booklet" | "user_drawing"; notes?: string };
   particulars: Particulars;
   lightship: Lightship;
   hydrostatics: HydrostaticRow[];   // one row per draught (and trim, if trim-corrected)
@@ -17,12 +17,13 @@ export interface VesselModel {
   draughtMarks: DraughtMarks;
   constants: Constant[];             // fixed items, e.g. crew, stores
   stabilityCriteria: CriterionRef[]; // pulled from the ship's own booklet
+  layout?: { loa?: number | null };   // user ships: the layout they were built from
 }
 
 export interface Particulars {
   name: string;
   vesselType: "product_tanker";
-  sizeClass: "MR1" | "MR2" | "LR1" | "LR2";
+  sizeClass: "MR1" | "MR2" | "LR1" | "LR2" | "Handysize" | "Other";
   lbp: number;
   breadth: number;
   depth: number;
