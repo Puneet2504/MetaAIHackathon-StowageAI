@@ -443,3 +443,30 @@ input.estimated { border-color: var(--warn) !important; box-shadow: inset 0 0 0 
 .preview-skeleton svg { width: 100%; max-width: 760px; }
 .skeleton-hull { fill: var(--panel-2); stroke: var(--line); stroke-width: 3; animation: shimmer 1.4s ease-in-out infinite; }
 @keyframes shimmer { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+
+/* A fieldset used only to lock a group of inputs, with no frame of its own. */
+.plain-fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.plain-fieldset:disabled { opacity: 0.6; }
+
+/* Ordered quantity to tank volume; assumed conditions are outlined like other estimates. */
+.quantities { margin-top: 0.75rem; }
+.quantities h3 { margin: 0 0 0.25rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.quantities td.assumed { box-shadow: inset 0 0 0 1px var(--warn); background: var(--warn-soft); }
+
+/* Grade changes: one row per change of grade, with a pill for the cleaning level. */
+.cleaning { margin-top: 1.25rem; }
+.cleaning h2 { display: flex; align-items: center; gap: 0.4rem; }
+.cleaning-port { margin: 0.75rem 0; }
+.cleaning-port h3 { margin: 0 0 0.35rem; font-size: 1rem; }
+.cleaning-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.4rem; }
+.cleaning-list > li { border: 1px solid var(--line); border-radius: 10px; padding: 0.5rem 0.75rem; background: var(--panel-2); }
+.cleaning-list summary { cursor: pointer; display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; }
+.cleaning-list h4 { margin: 0.5rem 0 0.2rem; font-size: 0.85rem; color: var(--muted); }
+.cleaning-list ol, .cleaning-list ul { margin: 0; padding-left: 1.2rem; }
+.level-pill { border-radius: 999px; padding: 0.05rem 0.55rem; font-size: 0.75rem; font-weight: 600; }
+.level-pill.drain { background: var(--accent-soft); color: var(--accent); }
+.level-pill.wash { background: var(--warn-soft); color: var(--warn); }
+.level-pill.full { background: var(--fail-soft); color: var(--fail); }
+.stage-picker { margin-bottom: 0.5rem; }
+.clean-chip { color: var(--warn); font-weight: 600; }
+.saving { display: flex; gap: 0.4rem; align-items: flex-start; background: var(--pass-soft); color: var(--pass); border-radius: 10px; padding: 0.5rem 0.75rem; }

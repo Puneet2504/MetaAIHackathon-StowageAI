@@ -39,7 +39,7 @@ export default function Login({ onSignedIn }: Props) {
     finally { setBusy(false); }
   };
 
-  const changeEmail = (v: string) => { setEmail(v); if (newAccount) setNewAccount(false); };
+  const changeEmail = (v: string) => { setEmail(v); setError(null); if (newAccount) setNewAccount(false); };
 
   return (
     <div className="signin">
@@ -98,7 +98,7 @@ export default function Login({ onSignedIn }: Props) {
             {busy ? "Please wait…" : newAccount ? "Create account" : "Sign in"}
           </button>
           {newAccount && (
-            <button type="button" className="link" onClick={() => setNewAccount(false)}>Use a different email</button>
+            <button type="button" className="link" onClick={() => { setNewAccount(false); setError(null); }}>Use a different email</button>
           )}
 
           {demoEmail && !newAccount && (

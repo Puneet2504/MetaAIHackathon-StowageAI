@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { addGrade, allGrades, gradeById } from "./grades";
 import HullPlan, { type TankState } from "./HullPlan";
 import Icon from "./Icons";
+import Cleaning from "./Cleaning";
+import Quantities from "./Quantities";
 import StabilityPanel, { Explanation } from "./StabilityPanel";
 import type { VesselModel } from "./types/vessel-model";
-import type { ApprovedPlanSummary, MemoryItem, Parcel, PlanResponse, StabilityResult, StowageConstraints,
+import type { ApprovedPlanSummary, MemoryItem, Parcel, PlanResponse, PlanStage, StabilityResult, StowageConstraints,
   TankLoad } from "./types/api";
 
 // Fixed bunkers and fresh water for the demo condition; only those tanks the ship has are used.
@@ -22,7 +24,7 @@ const SAMPLE_PARCELS: Parcel[] = [
   { grade: "ULSD", quantity_t: 20000, quantity_m3: null, density_t_m3: null, load_port: "Rotterdam", discharge_port: "Le Havre" },
   { grade: "Jet A-1", quantity_t: 12000, quantity_m3: null, density_t_m3: null, load_port: "Rotterdam", discharge_port: "Bilbao" },
 ];
-const NO_CONSTRAINTS: StowageConstraints = { empty_tanks: [], fixed_grades: {}, max_trim_m: null };
+const NO_CONSTRAINTS: StowageConstraints = { empty_tanks: [], fixed_grades: {}, max_trim_m: null, fill: null };
 const STATUS_TEXT: Record<string, string> = {
   planned: "Plan ready", partial: "Plan ready, cargo left over", fails_criteria: "No passing plan found",
   cannot_segregate: "Cannot segregate these grades", nothing_to_plan: "Nothing to plan",
@@ -88,7 +90,19 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
   const [planError, setPlanError] = useState<string | null>(null);
   const [instruction, setInstruction] = useState("");
   const [approved, setApproved] = useState<string | null>(null);
+  const [approving, setApproving] = useState(false);
+  const [stageView, setStageView] = useState(0);  // 0: departure condition; n: after the n-th reload port
+  const approvingRef = useRef(false);  // set at once, so a fast second click can't approve twice
+  // The order text the current plan was made from; saved with the voyage on approval.
+  const [plannedOrder, setPlannedOrder] = useState<string | null>(null);
   const [history, setHistory] = useState<ApprovedPlanSummary[]>([]);
+  // Every plan, check or manual change takes a new number; a reply is only shown if it is still the latest,
+  // so a slow reply can't overwrite newer tanks or results.
+  const reqRef = useRef(0);
+  const planReq = useRef(0);
+  const checkReq = useRef(0);
+  const resultRef = useRef<StabilityResult | null>(null);
+  resultRef.current = result;
 
   useEffect(() => {
     api.vessel(vesselId)
@@ -115,6 +129,7 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
       else if (p === "mixed") next[t.id] = { grade: no <= 2 ? "JET" : no <= 4 ? "ULSD" : "GASOLINE", fillPct: 98 };
       else next[t.id] = t.side === "S" ? { grade: "ULSD", fillPct: 98 } : { grade: null, fillPct: 0 };
     });
+    reqRef.current++;
     setState(next);
     setResult(null);
     setExplanation(null);
@@ -124,9 +139,11 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
   useEffect(() => { if (vessel) applyPreset("clear"); }, [vessel]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const update = (id: string, patch: Partial<TankState>) => {
+    reqRef.current++;
     setState((s) => ({ ...s, [id]: { ...s[id], ...patch } }));
     setResult(null);
     setExplanation(null);
+    setCheckError(null);
     setPlan(null); // a manual change means the AI plan no longer applies
   };
 
@@ -136,7 +153,7 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
       const s = state[t.id];
       const g = gradeById(s?.grade ?? null);
       if (!g || !s.fillPct) return;
-      loads.push({ tank_id: t.id, volume_m3: (t.capacity100 * s.fillPct) / 100, density_t_m3: g.density, grade: g.id });
+      loads.push({ tank_id: t.id, volume_m3: (t.capacity100 * s.fillPct) / 100, density_t_m3: s.density ?? g.density, grade: g.id });
     });
     return [...loads, ...fixed];
   };
@@ -146,21 +163,25 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
     cargoTanks.forEach((t) => {
       const s = state[t.id];
       const g = gradeById(s?.grade ?? null);
-      if (g && s.fillPct) byGrade[g.id] = (byGrade[g.id] ?? 0) + (t.capacity100 * s.fillPct / 100) * g.density;
+      if (g && s.fillPct) byGrade[g.id] = (byGrade[g.id] ?? 0) + (t.capacity100 * s.fillPct / 100) * (s.density ?? g.density);
     });
     return byGrade;
   }, [state, cargoTanks]);
+
 
   // Show a plan from the solver: tank states, stability result and explanation.
   const showPlan = (r: PlanResponse) => {
     setPlan(r);
     setApproved(null);
+    setStageView(0);
     r.plan.allocation.forEach((a) => addGrade(a.grade_id, a.grade, a.density_t_m3));
+    const density: Record<string, number> = Object.fromEntries(r.plan.allocation.map((a) => [a.grade_id, a.density_t_m3]));
     const next: Record<string, TankState> = {};
     cargoTanks.forEach((t) => { next[t.id] = { grade: null, fillPct: 0 }; });
     r.plan.loads.forEach((l) => {
       const t = cargoTanks.find((c) => c.id === l.tank_id);
-      if (t) next[t.id] = { grade: l.grade ?? null, fillPct: Math.round((1000 * l.volume_m3) / t.capacity100) / 10 };
+      if (t) next[t.id] = { grade: l.grade ?? null, fillPct: Math.round((1000 * l.volume_m3) / t.capacity100) / 10,
+        density: l.grade ? density[l.grade] ?? l.density_t_m3 : undefined };
     });
     setState(next);
     setResult(r.plan.result);
@@ -170,45 +191,63 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
   };
 
   const runPlan = async (opts: { parcels?: Parcel[]; instructions?: string; memoryOff?: string[] } = {}) => {
+    // A new order starts clean; changes and memory toggles build on the current plan.
+    const fresh = !opts.instructions && !opts.memoryOff;
+    const n = ++reqRef.current;
+    planReq.current = n;
+    if (fresh) setMemoryOff([]);
     setPlanning(true); setPlanError(null);
     try {
-      showPlan(await api.planVoyage({
+      const r = await api.planVoyage({
         vessel_id: vesselId,
         order_text: opts.parcels ? undefined : order,
-        parcels: opts.parcels ?? (opts.instructions || opts.memoryOff ? plan?.parcels : undefined),
+        parcels: opts.parcels ?? (fresh ? undefined : plan?.parcels),
         instructions: opts.instructions,
-        constraints: plan?.constraints ?? NO_CONSTRAINTS,
-        memory_off: opts.memoryOff ?? memoryOff,
-      }));
+        constraints: fresh ? NO_CONSTRAINTS : plan?.constraints ?? NO_CONSTRAINTS,
+        memory_off: fresh ? [] : opts.memoryOff ?? memoryOff,
+      });
+      if (n !== reqRef.current) return;
+      showPlan(r);
+      if (fresh) setPlannedOrder(opts.parcels ? SAMPLE_ORDER : order);
       setInstruction("");
-    } catch (e) { setPlanError((e as Error).message); }
-    finally { setPlanning(false); }
+    } catch (e) { if (n === reqRef.current) setPlanError((e as Error).message); }
+    finally { if (planReq.current === n) setPlanning(false); }
   };
 
   const approve = async () => {
-    if (!plan) return;
+    if (!plan || approvingRef.current) return;
+    approvingRef.current = true;
+    setApproving(true);
     try {
-      const r = await api.approvePlan({ vessel_id: vesselId, order_text: order, parcels: plan.parcels,
+      const r = await api.approvePlan({ vessel_id: vesselId, order_text: plannedOrder ?? order, parcels: plan.parcels,
         constraints: plan.applied_constraints, plan: plan.plan, explanation: plan.explanation });
       setApproved(r.id);
       api.listPlans(vesselId).then(setHistory).catch(() => {});
     } catch (e) { setPlanError((e as Error).message); }
+    finally { approvingRef.current = false; setApproving(false); }
   };
 
-  const reject = () => { setPlan(null); setApproved(null); applyPreset("clear"); };
+  const reject = () => { setPlan(null); setApproved(null); setMemoryOff([]); applyPreset("clear"); };
 
   const runCheck = async () => {
+    const n = ++reqRef.current;
+    checkReq.current = n;
     setChecking(true); setCheckError(null); setExplanation(null);
-    try { setResult(await api.check(vesselId, buildLoads())); }
-    catch (e) { setResult(null); setCheckError((e as Error).message); }
-    finally { setChecking(false); }
+    try {
+      const r = await api.check(vesselId, buildLoads());
+      if (n === reqRef.current) setResult(r);
+    } catch (e) { if (n === reqRef.current) { setResult(null); setCheckError((e as Error).message); } }
+    finally { if (checkReq.current === n) setChecking(false); }
   };
 
   const runExplain = async () => {
     if (!result) return;
+    const target = result;
     setExplaining(true);
-    try { const r = await api.explain(result); setExplanation(r.explanation); setExplanationSource(r.source); }
-    catch (e) { setExplanation(`Explanation unavailable: ${(e as Error).message}`); }
+    try {
+      const r = await api.explain(target);
+      if (resultRef.current === target) { setExplanation(r.explanation); setExplanationSource(r.source); }
+    } catch (e) { if (resultRef.current === target) setExplanation(`Explanation unavailable: ${(e as Error).message}`); }
     finally { setExplaining(false); }
   };
 
@@ -216,6 +255,14 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
   if (!vessel) return <p className="muted">Loading vessel…</p>;
 
   const p = plan?.plan;
+  const stages: PlanStage[] = p?.stages ?? [];
+  const stage = stageView > 0 ? stages[stageView - 1] ?? null : null;
+  // The hull shows the chosen condition: departure from the first port, or after a reload port.
+  const hullState: Record<string, TankState> = !stage ? state : Object.fromEntries(cargoTanks.map((t) => {
+    const l = stage.loads.find((x) => x.tank_id === t.id);
+    return [t.id, l ? { grade: l.grade ?? null, fillPct: Math.round((1000 * l.volume_m3) / t.capacity100) / 10, density: l.density_t_m3 }
+      : { grade: null, fillPct: 0 }];
+  }));
   const c = plan?.applied_constraints;
   // Remembered rules: the ones used in this plan, plus any switched off for it.
   const memoryChips: MemoryItem[] = plan ? plan.memory_used : [];
@@ -224,7 +271,11 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
     setMemoryOff(next);
     if (plan) runPlan({ memoryOff: next });
   };
-  const hasConstraints = !!c && (c.empty_tanks.length > 0 || Object.keys(c.fixed_grades).length > 0 || c.max_trim_m !== null);
+  // While a plan is shown, the legend gives the tonnes it placed in the order's basis; after manual edits, tank totals.
+  const shownTotals: Record<string, number> = p && p.allocation.every((a) => a.tonnes !== undefined)
+    ? p.allocation.reduce((acc, a) => ({ ...acc, [a.grade_id]: (acc[a.grade_id] ?? 0) + a.tonnes! }), {} as Record<string, number>)
+    : totals;
+  const hasConstraints = !!c && (c.empty_tanks.length > 0 || Object.keys(c.fixed_grades).length > 0 || c.max_trim_m !== null || !!c.fill);
   const modelMissing = planError?.includes("No model configured");
 
   return (
@@ -263,11 +314,11 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
           <div className="memory-row">
             <span className="small muted"><Icon name="memory" size={14} /> Using memory:</span>
             {memoryChips.map((m) => (
-              <button key={m.id} className="memory-chip on" onClick={() => toggleMemory(m.id)}
+              <button key={m.id} className="memory-chip on" onClick={() => toggleMemory(m.id)} disabled={planning}
                 title="Remembered rule. Click to leave it out of this plan.">{m.text} <Icon name="cross" size={12} /></button>
             ))}
             {memoryOff.map((id) => (
-              <button key={id} className="memory-chip" onClick={() => toggleMemory(id)} title="Switched off for this plan. Click to use it again.">
+              <button key={id} className="memory-chip" onClick={() => toggleMemory(id)} disabled={planning} title="Switched off for this plan. Click to use it again.">
                 Rule switched off <Icon name="plus" size={12} />
               </button>
             ))}
@@ -282,7 +333,7 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
         )}
         {modelMissing && (
           <p className="small">
-            <button className="link" onClick={() => runPlan({ parcels: SAMPLE_PARCELS })}>Plan the sample order without AI</button>
+            <button className="link" onClick={() => runPlan({ parcels: SAMPLE_PARCELS })} disabled={planning}>Plan the sample order without AI</button>
             {" "}(uses the sample order already read into parcels).
           </p>
         )}
@@ -290,11 +341,20 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
 
       <section className="plan card" aria-labelledby="plan-h">
         <h2 id="plan-h" className="visually-hidden">Tank plan</h2>
-        <HullPlan vessel={vessel} state={state} selected={selected} onSelect={setSelected} />
+        {stages.length > 0 && (
+          <div className="presets stage-picker" role="group" aria-label="Condition shown">
+            {[`Departure ${plan?.parcels.find((x) => x.load_port)?.load_port ?? "first port"}`, ...stages.map((s) => `After ${s.port}`)]
+              .map((label, i) => (
+                <button key={label} className={stageView === i ? "primary small-btn" : "small-btn"} aria-pressed={stageView === i}
+                  onClick={() => setStageView(i)}>{label}</button>
+              ))}
+          </div>
+        )}
+        <HullPlan vessel={vessel} state={hullState} selected={selected} onSelect={setSelected} />
         <ul className="legend">
           {allGrades().map((g) => (
             <li key={g.id}><span className="swatch" style={{ background: g.color }} />{g.name}
-              {totals[g.id] ? <strong> {Math.round(totals[g.id]).toLocaleString()} t</strong> : null}
+              {shownTotals[g.id] ? <strong> {Math.round(shownTotals[g.id]).toLocaleString()} t</strong> : null}
             </li>
           ))}
         </ul>
@@ -314,9 +374,11 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
                   <table>
                     <thead><tr><th>Grade</th><th>Lines</th><th>Tanks</th><th className="num">m³</th></tr></thead>
                     <tbody>
-                      {p.allocation.map((a) => (
+                      {[...p.allocation.map((a) => ({ a, at: "" })),
+                        ...stages.flatMap((s) => s.allocation.map((a) => ({ a, at: s.port })))].map(({ a, at }) => (
                         <tr key={a.parcel}>
-                          <td><span className="swatch" style={{ background: gradeById(a.grade_id)?.color }} />{a.grade}</td>
+                          <td><span className="swatch" style={{ background: gradeById(a.grade_id)?.color }} />{a.grade}
+                            {at && <span className="muted small"> · loaded at {at}</span>}</td>
                           <td>{a.lines.join(", ")}</td>
                           <td>{a.tanks.join(", ")}</td>
                           <td className="num">
@@ -329,17 +391,19 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
                   </table>
                 </div>
               )}
+              <Quantities allocation={[...p.allocation, ...stages.flatMap((s) => s.allocation)]} />
               {hasConstraints && c && (
                 <p className="muted small">
                   Constraints: {[
                     c.empty_tanks.length ? `empty ${c.empty_tanks.join(", ")}` : "",
                     ...Object.entries(c.fixed_grades).map(([t, g]) => `${t} carries ${g}`),
                     c.max_trim_m !== null ? `trim at most ${c.max_trim_m} m` : "",
+                    c.fill === "even" ? "cargo spread evenly over all tanks" : c.fill === "full" ? "tanks filled to 98%" : "",
                   ].filter(Boolean).join("; ")}
                 </p>
               )}
               {[...plan!.parcel_notes, ...p.warnings].length > 0 && (
-                <ul className="warnings">{[...plan!.parcel_notes, ...p.warnings].map((w) => <li key={w}>{w}</li>)}</ul>
+                <ul className="warnings">{[...plan!.parcel_notes, ...p.warnings].map((w, i) => <li key={i}>{w}</li>)}</ul>
               )}
               {approved
                 ? (
@@ -351,13 +415,16 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
                 : (
                   <div className="approve">
                     <div className="presets">
-                      <button className="primary" onClick={approve} disabled={!p.result || p.status === "fails_criteria"}>Approve plan</button>
-                      <button onClick={reject}>Reject</button>
+                      <button className="primary" onClick={approve}
+                        disabled={!p.result || p.status === "fails_criteria" || approving || planning}>
+                        {approving && <span className="spinner" aria-hidden="true" />}{approving ? "Approving…" : "Approve plan"}
+                      </button>
+                      <button onClick={reject} disabled={approving}>Reject</button>
                     </div>
                     <form className="changes" onSubmit={(e) => { e.preventDefault(); if (instruction.trim()) runPlan({ instructions: instruction }); }}>
                       <input aria-label="Ask for changes" value={instruction} onChange={(e) => setInstruction(e.target.value)}
                         placeholder="Ask for changes, e.g. keep tank 3 empty (add 'always' to remember it)" />
-                      <button type="submit" disabled={planning || !instruction.trim()}>Replan</button>
+                      <button type="submit" disabled={planning || approving || !instruction.trim()}>Replan</button>
                     </form>
                   </div>
                 )}
@@ -391,7 +458,7 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
                         <td>{t.id}</td>
                         <td>
                           <select aria-label={`Grade in ${t.id}`} value={s.grade ?? ""}
-                            onChange={(e) => update(t.id, { grade: e.target.value || null, fillPct: e.target.value ? (s.fillPct || 98) : 0 })}>
+                            onChange={(e) => update(t.id, { grade: e.target.value || null, fillPct: e.target.value ? (s.fillPct || 98) : 0, density: undefined })}>
                             <option value="">Empty</option>
                             {allGrades().map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
                           </select>
@@ -438,11 +505,19 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
         <section className="card" aria-labelledby="result-h" aria-live="polite">
           <h2 id="result-h">Stability</h2>
           {!result && !checkError && <p className="muted">Plan a voyage, or adjust the tanks manually and check stability.</p>}
-          {result && (
+          {stage && (
+            <>
+              <p className="muted small">Condition on leaving {stage.port}, after discharging {stage.discharged.join(", ") || "cargo"} and
+                loading {stage.allocation.map((a) => a.grade).join(", ")}.</p>
+              {stage.result ? <StabilityPanel result={stage.result} /> : <p className="error">{stage.message}</p>}
+              {stage.warnings.length > 0 && <ul className="warnings">{stage.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>}
+            </>
+          )}
+          {result && !stage && (
             <>
               <StabilityPanel result={result} />
               {!plan && result.warnings.length > 0 && (
-                <ul className="warnings">{result.warnings.map((w) => <li key={w}>{w}</li>)}</ul>
+                <ul className="warnings">{result.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
               )}
               {!explanation && (
                 <button onClick={runExplain} disabled={explaining}>
@@ -454,6 +529,7 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
           )}
         </section>
       </div>
+      {p?.cleaning && <Cleaning key={JSON.stringify(p.cleaning).length + (plan?.parcels.length ?? 0)} report={p.cleaning} />}
     </>
   );
 }

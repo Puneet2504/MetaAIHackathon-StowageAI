@@ -45,6 +45,10 @@ def read_instruction(instruction: str, cargo_tanks: list[str], grades: list[str]
                              InstructionOut, model=model, max_tokens=config.MAX_TOKENS_JSON)
 
 
+def cleaning_checklist(digest: dict) -> str:
+    return client.chat_text(prompts.CLEANING_SYSTEM, compact(digest), max_tokens=config.MAX_TOKENS_CHECKLIST)
+
+
 def explain(system: str, digest: dict, memory_lines: list[str] | None = None, question: str | None = None) -> str:
     user = compact(for_model(digest)) +(f"\nQuestion: {question.strip()}" if question else "")
     return client.chat_text(system, _with_memory(user, memory_lines), max_tokens=config.MAX_TOKENS_EXPLAIN)

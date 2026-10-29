@@ -21,6 +21,7 @@ MODEL_JSON_MODE = os.getenv("MODEL_JSON_MODE", "false").lower() in ("1", "true",
 # Output caps per task, in tokens. Reasoning models count their hidden reasoning here too,
 # so these are safety limits, not targets.
 MAX_TOKENS_EXPLAIN = int(os.getenv("MAX_TOKENS_EXPLAIN", "900"))
+MAX_TOKENS_CHECKLIST = int(os.getenv("MAX_TOKENS_CHECKLIST", "1800"))  # cleaning checklists cover several ports
 MAX_TOKENS_JSON = int(os.getenv("MAX_TOKENS_JSON", "1200"))
 MAX_TOKENS_DRAWING = int(os.getenv("MAX_TOKENS_DRAWING", "8000"))  # big GA drawings: 30+ tanks
 # How much hidden reasoning to ask for (OpenAI-style reasoning_effort). Empty = don't send it.

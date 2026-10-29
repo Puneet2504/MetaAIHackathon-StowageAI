@@ -7,7 +7,7 @@ from unittest import mock
 
 from app import config
 from app.llm import cache, client, prompts, tasks, usage
-from app.llm.digest import plan_digest, stability_digest
+from app.llm.digest import for_model, plan_digest, stability_digest
 from app.stowage.solver import solve
 from app.schemas import Parcel
 
@@ -94,9 +94,15 @@ class TokenTests(unittest.TestCase):
         self.assertLess(len(text), len(json.dumps(plan)) / 4)
         self.assertNotIn("gz_curve", stability_digest(plan["result"]))
 
+    def test_digest_states_the_cargo_basis_for_the_model(self):
+        plan = solve(VESSEL, [Parcel(grade="ULSD", quantity_t=20000, load_port="Rotterdam")])
+        m = for_model(plan_digest(plan))
+        self.assertIn("Rotterdam average", m["cargo_basis"][0])
+        self.assertIn("ULSD density", m["assumed"])
+
     def test_prompts_stay_short(self):
-        limits = {"PARSE_ORDER_SYSTEM": 1000, "READ_DRAWING_SYSTEM": 1950, "STOWAGE_INSTRUCTIONS_SYSTEM": 1450,
-                  "EXPLAIN_SYSTEM": 650, "EXPLAIN_PLAN_SYSTEM": 700}
+        limits = {"PARSE_ORDER_SYSTEM": 1100, "READ_DRAWING_SYSTEM": 1950, "STOWAGE_INSTRUCTIONS_SYSTEM": 1450,
+                  "EXPLAIN_SYSTEM": 650, "EXPLAIN_PLAN_SYSTEM": 700, "CLEANING_SYSTEM": 700}
         for name, limit in limits.items():
             self.assertLessEqual(len(getattr(prompts, name)), limit, name)
 

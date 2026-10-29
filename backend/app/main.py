@@ -9,8 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import config, memory, users, vessels
 from .engine.stability import StabilityError, TankLoad, calculate, calculate_sequence
 from .llm import client, plain, prompts, segment, tasks, usage
-from .llm.digest import stability_digest
-from .schemas import (ApproveIn, ConditionIn, ExplainIn, ExplainOut, LayoutIn, MemoryNoteIn, MemoryPatchIn,
+from .llm.digest import cleaning_digest, stability_digest
+from .schemas import (ApproveIn, CleaningIn, ConditionIn, ExplainIn, ExplainOut, LayoutIn, MemoryNoteIn, MemoryPatchIn,
                       ParseOrderIn, ParseOrderOut, PlanIn, ReadDrawingIn, ReadDrawingOut, SequenceIn, SignInIn)
 from .stowage import pipeline
 from .users import current_user
@@ -261,6 +261,21 @@ def read_drawing(body: ReadDrawingIn, user: str = Depends(current_user)):
         raise HTTPException(503, str(e))
     except client.ModelError as e:
         raise HTTPException(502, f"Could not read the drawing: {e}")
+
+
+@app.post("/api/ai/cleaning", response_model=ExplainOut)
+def cleaning_checklist(body: CleaningIn, user: str = Depends(current_user)):
+    """Port checklist for tanks that change grade. The cleaning levels come from fixed rules; the AI only writes them up."""
+    d = cleaning_digest(body.cleaning)
+    if not d["changes"]:
+        return ExplainOut(explanation="Before arrival:\n- No tank changes grade, so no cleaning is needed.", source="plain")
+    if config.model_configured():
+        try:
+            with usage.track(user):
+                return ExplainOut(explanation=tasks.cleaning_checklist(d), source="ai")
+        except client.ModelError:
+            pass
+    return ExplainOut(explanation=plain.cleaning_checklist(d), source="plain")
 
 
 @app.post("/api/ai/explain", response_model=ExplainOut)

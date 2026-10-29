@@ -63,7 +63,7 @@ export function Explanation({ text, source }: { text: string; source?: "ai" | "p
   for (const raw of text.split("\n")) {
     const line = raw.trim();
     if (!line) continue;
-    const head = line.match(/^(Verdict|Why|What to do):\s*(.*)$/i);
+    const head = line.match(/^(Verdict|Why|What to do|Before arrival|At berth before loading|Before sailing):\s*(.*)$/i);
     if (head) sections.push({ title: head[1], lines: head[2] ? [head[2]] : [] });
     else if (sections.length) sections[sections.length - 1].lines.push(line.replace(/^[-•*]\s*/, ""));
     else sections.push({ title: "", lines: [line] });

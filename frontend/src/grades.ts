@@ -17,9 +17,16 @@ export const GRADES: Grade[] = [
 // Grades an order brings in that are not in the library; shown in a neutral colour.
 const extra: Grade[] = [];
 
+// An order's own density wins over an earlier one for the same extra grade.
 export const addGrade = (id: string, name: string, density: number) => {
-  if (!GRADES.concat(extra).some((g) => g.id === id)) extra.push({ id, name, density, color: "var(--g-other)" });
+  if (GRADES.some((g) => g.id === id)) return;
+  const known = extra.find((g) => g.id === id);
+  if (known) known.density = density;
+  else extra.push({ id, name, density, color: "var(--g-other)" });
 };
+
+// Called on sign-out, so one person's grades don't show up for the next.
+export const resetGrades = () => { extra.length = 0; };
 
 export const allGrades = () => GRADES.concat(extra);
 

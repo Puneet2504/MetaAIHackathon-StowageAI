@@ -68,6 +68,31 @@ def explain_stability(d: dict) -> str:
     return f"Verdict: {verdict}\nWhy:\n{_bullets(plain_stability(d))}\nWhat to do:\n{_bullets(_todo(d))}"
 
 
+def cleaning_checklist(d: dict) -> str:
+    """The port checklist from the cleaning rules, used when the model is unavailable."""
+    arrival, berth, sailing = [], [], []
+    for c in d["changes"]:
+        where = f"{c['port']}, {c['tanks']}"
+        arrival.append(f"{where}: {c['cleaning'].lower()} for {c['change']} ({c['why']}).")
+        if c["steps"]:
+            berth.append(f"{where}: " + "; ".join(s[0].lower() + s[1:] for s in c["steps"]) + ".")
+        berth.append(f"{where}, checks: " + "; ".join(c["checks"]) + ".")
+    for port, time in d.get("port_time", {}).items():
+        arrival.append(f"{port}: allow {time} in the berth plan.")
+    for port, checks in d["port_checks"].items():
+        arrival.append(f"{port}: {checks[0]}.")
+        berth.append(f"{port}, port checks: " + "; ".join(checks[1:]) + ".")
+    sailing.append("Record the cleaning, inspections and test results for each tank in the cargo documents.")
+    return ("Before arrival:\n" + _bullets(arrival) + "\nAt berth before loading:\n" + _bullets(berth)
+            + "\nBefore sailing:\n" + _bullets(sailing))
+
+
+def assumed_note(p: dict) -> str:
+    """What to check when a parcel's temperature or density was not in the order (no numbers)."""
+    return ("Check against the cargo documents: these were not in the order, so typical values were used: "
+            + ", ".join(p["assumed"][:3]) + ".")
+
+
 def explain_plan(p: dict) -> str:
     d = p.get("stability")
     if d is None:
@@ -78,4 +103,9 @@ def explain_plan(p: dict) -> str:
                if p["status"] == "planned" else p.get("summary") or "The plan needs attention.")
     why = ["; ".join(where) + "."] if where else []
     why += plain_stability(d)
-    return f"Verdict: {verdict}\nWhy:\n{_bullets(why[:3])}\nWhat to do:\n{_bullets(_todo(d))}"
+    todo = _todo(d)
+    if p.get("assumed"):  # temperature or density not from the order
+        todo = todo[:1] + [assumed_note(p)]
+    if p.get("cleaning_saving"):
+        why = why[:2] + [p["cleaning_saving"] + "."]
+    return f"Verdict: {verdict}\nWhy:\n{_bullets(why[:3])}\nWhat to do:\n{_bullets(todo)}"

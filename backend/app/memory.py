@@ -16,8 +16,8 @@ from datetime import datetime, timezone
 from . import config, vessels
 from .schemas import MemoryOp
 
-SINGLE = {"max_trim", "explain_style"}  # one per scope
-CONSTRAINT_KINDS = {"constraint_empty", "constraint_fixed", "max_trim"}
+SINGLE = {"max_trim", "explain_style", "fill_mode"}  # one per scope
+CONSTRAINT_KINDS = {"constraint_empty", "constraint_fixed", "max_trim", "fill_mode"}
 MAX_LINES, MAX_CHARS = 8, 300
 
 _lock = threading.Lock()
@@ -29,7 +29,26 @@ def _path(user: str):
 
 def load(user: str) -> list[dict]:
     p = _path(user)
-    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
+    items = json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
+    if _notes_to_rules(items):
+        _save(user, items)
+    return items
+
+
+def _notes_to_rules(items: list[dict]) -> bool:
+    """A note that is really a fill rule ("keep tanks below 98% so all are used") becomes one, so the solver applies it.
+
+    Notes saved before fill rules existed are converted the first time memory is read; the person's wording is kept.
+    """
+    from .llm.fast_paths import fill_rule  # imported here: fast_paths imports schemas, which memory also needs
+    changed = False
+    for i in items:
+        if i["kind"] == "note" and (f := fill_rule(i.get("text", ""))):
+            if any(j is not i and j["kind"] == "fill_mode" and j["scope"] == i["scope"] for j in items):
+                continue  # a fill rule for this scope already exists; leave the note as it is
+            i.update(kind="fill_mode", key=None, value=f, updated_at=_now())
+            changed = True
+    return changed
 
 
 def _save(user: str, items: list[dict]) -> None:
@@ -86,7 +105,7 @@ def relevant(user: str, vessel_id: str | None) -> list[dict]:
 def constraints_for(user: str, vessel: dict, skip: set[str] = frozenset()) -> tuple[dict, list[dict]]:
     """Remembered constraints for this ship, as solver constraints, plus the items used."""
     cargo = {t["id"] for t in vessel["tanks"] if t["type"] == "cargo"}
-    empty, fixed, trim, used = [], {}, None, []
+    empty, fixed, trim, fill, used = [], {}, None, None, []
     # Global first, so a ship's own rule wins over a general one.
     for i in sorted(relevant(user, vessel["id"]), key=lambda i: i["scope"] != "global"):
         if i["id"] in skip or i["kind"] not in CONSTRAINT_KINDS:
@@ -97,7 +116,10 @@ def constraints_for(user: str, vessel: dict, skip: set[str] = frozenset()) -> tu
             fixed[i["key"]] = str(i["value"]); used.append(i)
         elif i["kind"] == "max_trim" and isinstance(i.get("value"), (int, float)):
             trim = float(i["value"]); used.append(i)
-    return {"empty_tanks": sorted(set(empty)), "fixed_grades": fixed, "max_trim_m": trim}, used
+        elif i["kind"] == "fill_mode" and i.get("value") in ("even", "full"):
+            used = [u for u in used if u["kind"] != "fill_mode"]  # the ship's own rule replaces the general one
+            fill = i["value"]; used.append(i)
+    return {"empty_tanks": sorted(set(empty)), "fixed_grades": fixed, "max_trim_m": trim, "fill": fill}, used
 
 
 def aliases(user: str) -> dict[str, str]:
@@ -131,8 +153,12 @@ def mark_used(user: str, ids: list[str]) -> None:
 # ---------- editing from the Memory page ----------
 
 def add_note(user: str, text: str, vessel_id: str | None = None) -> dict:
-    remembered, _ = apply_ops(user, vessel_id, [MemoryOp(op="set", scope="vessel" if vessel_id else "global",
-                                                         kind="note", text=text.strip())], source="memory page")
+    """A note for the assistant; one that states a fill rule is stored as that rule, so the solver applies it."""
+    from .llm.fast_paths import fill_rule
+    fill = fill_rule(text)
+    op = MemoryOp(op="set", scope="vessel" if vessel_id else "global", kind="fill_mode" if fill else "note",
+                  value=fill, text=text.strip())
+    remembered, _ = apply_ops(user, vessel_id, [op], source="memory page")
     return remembered[0]
 
 

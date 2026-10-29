@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { addGrade, allGrades, gradeById } from "./grades";
 import HullPlan, { type TankState } from "./HullPlan";
 import Icon from "./Icons";
+import Cleaning from "./Cleaning";
+import Quantities from "./Quantities";
 import StabilityPanel, { Explanation } from "./StabilityPanel";
 import type { VoyageDetail as Voyage } from "./types/api";
 import { Route } from "./Voyages";
@@ -16,6 +18,9 @@ interface Props {
 export default function VoyageDetail({ id, onBack, onPlanAgain }: Props) {
   const [v, setV] = useState<Voyage | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const deletingRef = useRef(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
     api.voyage(id).then((r) => {
@@ -38,9 +43,11 @@ export default function VoyageDetail({ id, onBack, onPlanAgain }: Props) {
   }, [v]);
 
   const remove = async () => {
-    if (!v || !window.confirm("Delete this voyage? This cannot be undone.")) return;
+    if (!v || deletingRef.current || !window.confirm("Delete this voyage? This cannot be undone.")) return;
+    deletingRef.current = true;
+    setDeleting(true); setDeleteError(null);
     try { await api.deleteVoyage(v.id); onBack(); }
-    catch (e) { setError((e as Error).message); }
+    catch (e) { setDeleteError((e as Error).message); setDeleting(false); deletingRef.current = false; }
   };
 
   if (error) return <><p className="error">{error}</p><button onClick={onBack}>Back to voyages</button></>;
@@ -63,9 +70,12 @@ export default function VoyageDetail({ id, onBack, onPlanAgain }: Props) {
               <Icon name="sparkle" size={16} /> Plan again
             </button>
           )}
-          <button onClick={remove}><Icon name="trash" size={16} /> Delete voyage</button>
+          <button onClick={remove} disabled={deleting}>
+            <Icon name="trash" size={16} /> {deleting ? "Deleting…" : "Delete voyage"}
+          </button>
         </div>
       </header>
+      {deleteError && <p className="error">{deleteError}</p>}
 
       {v.vessel ? (
         <section className="plan card" aria-label="Approved tank plan">
@@ -91,12 +101,13 @@ export default function VoyageDetail({ id, onBack, onPlanAgain }: Props) {
                     <td><span className="swatch" style={{ background: gradeById(a.grade_id)?.color }} />{a.grade}</td>
                     <td>{a.tanks.join(", ")}</td>
                     <td>{a.lines.join(", ")}</td>
-                    <td className="num">{Math.round(a.allocated_m3 * a.density_t_m3).toLocaleString()}</td>
+                    <td className="num">{Math.round(a.tonnes ?? a.allocated_m3 * a.density_t_m3).toLocaleString()}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          <Quantities allocation={[...v.plan.allocation, ...(v.plan.stages ?? []).flatMap((s) => s.allocation)]} />
           {v.explanation && <Explanation text={v.explanation} />}
           {v.order_text && (
             <details className="manual">
@@ -110,6 +121,7 @@ export default function VoyageDetail({ id, onBack, onPlanAgain }: Props) {
           {v.plan.result ? <StabilityPanel result={v.plan.result} /> : <p className="muted">No stability result stored.</p>}
         </section>
       </div>
+      {v.plan.cleaning && <Cleaning report={v.plan.cleaning} />}
     </>
   );
 }

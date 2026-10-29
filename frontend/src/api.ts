@@ -1,9 +1,9 @@
 import type { VesselModel } from "./types/vessel-model";
-import type { ApprovedPlanSummary, DraftLayout, MemoryItem, Parcel, PlanResponse, ReadDrawingOut, StabilityResult,
+import type { ApprovedPlanSummary, CleaningReport, DraftLayout, MemoryItem, Parcel, PlanResponse, ReadDrawingOut, StabilityResult,
   StowageConstraints, StowagePlan, TankLoad, UsageSummary, VesselLayout, VesselSummary, VoyageDetail,
   VoyageListItem } from "./types/api";
 
-const SESSION_KEY = "tanker-planner-session";
+export const SESSION_KEY = "tanker-planner-session";
 
 export interface Session {
   token: string;
@@ -51,7 +51,12 @@ async function call<T>(path: string, body?: unknown, method?: string, signal?: A
       const j = await res.json();
       if (j.detail) detail = errorText(j.detail);
     } catch { /* keep status text */ }
-    if (res.status === 401 && s && !path.startsWith("/auth/signin")) { session.clear(); onSignedOut(); }
+    if (res.status === 401 && !path.startsWith("/auth/signin")) {
+      // Only end the session this request was made with; another tab may have signed in since.
+      const current = session.get();
+      if (s && current?.token === s.token) session.clear();
+      if (!current || current.token === s?.token) onSignedOut();
+    }
     throw new Error(detail);
   }
   return (res.status === 204 ? undefined : res.json()) as Promise<T>;
@@ -90,5 +95,7 @@ export const api = {
   check: (vessel_id: string, loads: TankLoad[]) =>
     call<StabilityResult>("/stability/check", { vessel_id, loads }),
   parseOrder: (text: string) => call<{ parcels: Parcel[]; notes: string[] }>("/ai/parse-order", { text }),
+  cleaningChecklist: (cleaning: CleaningReport) =>
+    call<{ explanation: string; source: "ai" | "plain" }>("/ai/cleaning", { cleaning }),
   explain: (result: StabilityResult) => call<{ explanation: string; source: "ai" | "plain" }>("/ai/explain", { result }),
 };

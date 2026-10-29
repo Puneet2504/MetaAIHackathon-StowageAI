@@ -53,6 +53,12 @@ def score_order(expected: dict, actual: dict) -> list[str]:
         for f in ("load_port", "discharge_port"):
             if not _same_text(e[f], a.get(f)):
                 problems.append(f"{e['grade']} " + _invented(f, e[f], a.get(f)))
+        # Cargo conditions, checked only in cases that state them.
+        for f in ("quantity_bbl", "temp_c", "density_temp_c", "api"):
+            if f in e and not _same_num(e[f], a.get(f)):
+                problems.append(f"{e['grade']} " + _invented(f, e[f], a.get(f)))
+        if "mass_basis" in e and not _same_text(e["mass_basis"], a.get("mass_basis")):
+            problems.append(f"{e['grade']} " + _invented("mass_basis", e["mass_basis"], a.get("mass_basis")))
     return problems + _note_problems(expected, actual)
 
 

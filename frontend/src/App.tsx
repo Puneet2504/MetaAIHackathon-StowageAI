@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
-import { api, session, setSignedOutHandler, type Session } from "./api";
+import { useEffect, useRef, useState } from "react";
+import { api, session, SESSION_KEY, setSignedOutHandler, type Session } from "./api";
+import { resetGrades } from "./grades";
 import Icon from "./Icons";
 import { Brand } from "./Illustrations";
 import Login from "./Login";
@@ -31,11 +32,24 @@ export default function App() {
   const [view, setView] = useState<View>({ kind: "library" });
   const [theme, toggleTheme] = useTheme();
 
-  const signOut = () => { session.clear(); setUser(null); setView({ kind: "library" }); };
+  const userRef = useRef(user);
+  userRef.current = user;
+
+  // Switch to another session (or none) and start from the ship list, with nothing carried over.
+  const switchUser = (next: Session | null) => { resetGrades(); setUser(next); setView({ kind: "library" }); };
+  const signOut = () => { session.clear(); switchUser(null); };
 
   useEffect(() => {
-    setSignedOutHandler(() => { setUser(null); setView({ kind: "library" }); });
+    setSignedOutHandler(() => switchUser(null));
     if (user) api.me().catch(() => { /* a 401 already signed out */ });
+    // Signing in or out in another tab changes the stored session; follow it so this tab never acts as the wrong person.
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== null && e.key !== SESSION_KEY) return;
+      const next = session.get();
+      if (next?.token !== userRef.current?.token) switchUser(next);
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { window.scrollTo(0, 0); }, [view.kind]);
@@ -43,7 +57,7 @@ export default function App() {
   if (!user) return (
     <>
       <ThemeToggle theme={theme} onToggle={toggleTheme} className="signin-theme" />
-      <Login onSignedIn={(s) => { session.set(s); setUser(s); }} />
+      <Login onSignedIn={(s) => { session.set(s); switchUser(s); }} />
     </>
   );
 
@@ -70,7 +84,7 @@ export default function App() {
           </nav>
         </div>
       </header>
-      <main className="shell">
+      <main className="shell" key={user.email}>
         {view.kind === "library" && <ShipLibrary key={user.email} onOpen={setView} />}
         {view.kind === "planner" && (
           <Planner key={`${view.id}-${view.order ?? ""}`} vesselId={view.id} initialOrder={view.order}
@@ -79,7 +93,7 @@ export default function App() {
             onOpenVoyage={(id) => setView({ kind: "voyage", id })} />
         )}
         {view.kind === "edit" && (
-          <NewShip key={view.id ?? view.copyFrom ?? "new"} editId={view.id} copyFrom={view.copyFrom}
+          <NewShip key={`${view.id ?? ""}|${view.copyFrom ?? ""}`} editId={view.id} copyFrom={view.copyFrom}
             onCancel={() => setView({ kind: "library" })}
             onSaved={(id) => setView({ kind: "planner", id })} />
         )}

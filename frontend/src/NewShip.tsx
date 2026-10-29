@@ -23,6 +23,12 @@ const EMPTY: DraftLayout = { name: "", sizeClass: "Other", lbp: null, breadth: n
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
+// Each tank row gets a stable key, so removing or reordering rows keeps focus and inputs in place.
+type Row = DraftTank & { _k?: number };
+let rowSeq = 0;
+const keyed = (d: DraftLayout): DraftLayout =>
+  ({ ...d, tanks: (d.tanks ?? []).map((t) => ((t as Row)._k ? t : { ...t, _k: ++rowSeq } as Row)) });
+
 // Drop nulls so the backend sees only what was given; report what is still missing.
 function complete(d: DraftLayout): { layout?: VesselLayout; missing: string[] } {
   const missing: string[] = [];
@@ -38,7 +44,8 @@ function complete(d: DraftLayout): { layout?: VesselLayout; missing: string[] } 
     Object.fromEntries(Object.entries(o).filter(([, v]) => v !== null && v !== undefined && v !== "")) as T;
   return {
     missing,
-    layout: { ...clean(d), sizeClass: d.sizeClass ?? "Other", tanks: tanks.map((t) => clean(t) as LayoutTank) } as VesselLayout,
+    layout: { ...clean(d), sizeClass: d.sizeClass ?? "Other",
+      tanks: tanks.map(({ _k, ...t }: Row) => clean(t) as LayoutTank) } as VesselLayout,
   };
 }
 
@@ -72,11 +79,32 @@ export default function NewShip({ editId, copyFrom, onCancel, onSaved }: Props) 
   const [progress, setProgress] = useState<{ step: number; status: BuildStatus; startedAt: number; message?: string } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  // Each read gets a run number; its step timers only act while it is still the latest run.
+  const runRef = useRef(0);
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const imageSeq = useRef(0);
+  const mounted = useRef(true);
 
-  const loadLayout = (id: string, copy: boolean) =>
-    api.layout(id)
-      .then((l) => setDraft(copy ? { ...l, name: `Copy of ${l.name ?? "ship"}` } : l))
-      .catch((e) => setReadError(`Couldn't load the layout: ${e.message}`));
+  const clearTimers = () => { timers.current.forEach(clearTimeout); timers.current = []; };
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; abortRef.current?.abort(); clearTimers(); };
+  }, []);
+
+  // Results of an earlier read no longer apply once another layout is loaded.
+  const resetReadState = () => {
+    runRef.current++; clearTimers();
+    setFixes([]); setEstimated([]); setChecks([]); setNotes([]); setSegments([]); setProgress(null); setReadError(null);
+  };
+
+  const loadLayout = (id: string, copy: boolean) => {
+    resetReadState(); setLoadError(null);
+    return api.layout(id)
+      .then((l) => setDraft(keyed(copy ? { ...l, name: `Copy of ${l.name ?? "ship"}` } : l)))
+      .catch((e) => setLoadError(`Couldn't load the layout: ${e.message}`));
+  };
 
   useEffect(() => {
     if (editId) loadLayout(editId, false);
@@ -102,6 +130,8 @@ export default function NewShip({ editId, copyFrom, onCancel, onSaved }: Props) 
     return () => { stale = true; clearTimeout(t); };
   }, [draft]);
 
+  useEffect(() => { setSaveError(null); }, [draft]);
+
   useEffect(() => {
     if (!progress || progress.status !== "running" || progress.step !== 3 || previewing) return;
     if (preview) {
@@ -116,7 +146,9 @@ export default function NewShip({ editId, copyFrom, onCancel, onSaved }: Props) 
     if (!file) return;
     if (!/^image\/(png|jpeg|webp)$/.test(file.type)) { setImageError("Use a PNG, JPEG or WebP image."); return; }
     if (file.size > MAX_IMAGE_BYTES) { setImageError("The image is larger than 5 MB."); return; }
-    setImage(await readFile(file));
+    const n = ++imageSeq.current;  // if two images are dropped quickly, keep the last one
+    const data = await readFile(file);
+    if (n === imageSeq.current) setImage(data);
   };
 
   const onPaste = (e: React.ClipboardEvent) => {
@@ -125,29 +157,31 @@ export default function NewShip({ editId, copyFrom, onCancel, onSaved }: Props) 
   };
 
   const read = async () => {
-    setReading(true); setReadError(null); setNotes([]); setChecks([]); setSegments([]); setFixes([]); setEstimated([]);
+    resetReadState(); setLoadError(null);
+    const run = runRef.current;
+    const later = (ms: number, fn: () => void) => { timers.current.push(setTimeout(() => { if (run === runRef.current) fn(); }, ms)); };
+    setReading(true);
     const startedAt = Date.now();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     setProgress({ step: 0, status: "running", startedAt });
     // The request is one call; the first step is the upload, so move on once it's under way.
-    const sent = setTimeout(() => setProgress((p) => (p && p.step === 0 ? { ...p, step: 1 } : p)), image ? 900 : 300);
+    later(image ? 900 : 300, () => setProgress((p) => (p && p.step === 0 ? { ...p, step: 1 } : p)));
     try {
       const r = await api.readDrawing(text, image, ctrl.signal);
-      clearTimeout(sent);
+      if (run !== runRef.current) return;
       setProgress({ step: 2, status: "running", startedAt });
-      setDraft({ ...EMPTY, ...r.layout, tanks: r.layout.tanks ?? [] });
+      setDraft(keyed({ ...EMPTY, ...r.layout, tanks: r.layout.tanks ?? [] }));
       setNotes(r.notes); setChecks(r.checks ?? []); setSegments(r.segments); setFixes(r.fixes ?? []); setEstimated(r.estimated ?? []);
       // Show the checks step briefly (it ran on the server), then wait for the vessel to build.
-      setTimeout(() => setProgress((p) => (p && p.step === 2 ? { ...p, step: 3 } : p)), 600);
+      later(600, () => setProgress((p) => (p && p.step === 2 ? { ...p, step: 3 } : p)));
     } catch (e) {
-      clearTimeout(sent);
+      if (run !== runRef.current) return;
       const cancelled = ctrl.signal.aborted;
       setProgress((p) => p && { ...p, status: "failed", message: cancelled ? "Cancelled." : (e as Error).message });
       if (!cancelled) setReadError((e as Error).message);
     } finally {
-      setReading(false);
-      abortRef.current = null;
+      if (abortRef.current === ctrl) { setReading(false); abortRef.current = null; }
     }
   };
 
@@ -155,6 +189,7 @@ export default function NewShip({ editId, copyFrom, onCancel, onSaved }: Props) 
 
   const setField = (patch: Partial<DraftLayout>) => {
     setEstimated((e) => e.filter((k) => !(k in patch)));  // an edited value is no longer an estimate
+    setFixes((all) => all.filter((f) => !(f.tank === null && f.field in patch)));  // nor a correction to undo
     setDraft((d) => ({ ...d, ...patch }));
   };
 
@@ -162,7 +197,7 @@ export default function NewShip({ editId, copyFrom, onCancel, onSaved }: Props) 
   const undoFix = (f: DrawingFix) => {
     setDraft((d) => {
       if (f.tank === null) return { ...d, [f.field]: f.old as number | null };
-      if (f.field === "removed") return { ...d, tanks: [...(d.tanks ?? []), f.old as DraftTank] };
+      if (f.field === "removed") return keyed({ ...d, tanks: [...(d.tanks ?? []), f.old as DraftTank] });
       const tanks = (d.tanks ?? []).map((t) => {
         const target = f.field === "id" ? f.new : f.tank;
         if (t.id !== target) return t;
@@ -175,16 +210,23 @@ export default function NewShip({ editId, copyFrom, onCancel, onSaved }: Props) 
       return { ...d, tanks };
     });
     setFixes((all) => all.filter((x) => x !== f));
-    setEstimated((e) => e.filter((k) => k !== f.field && !(f.field === "position" && f.tank && k.startsWith(`${f.tank}.`))));
+    setEstimated((e) => e.filter((k) => f.tank === null ? k !== f.field
+      : !(k === `${f.tank}.${f.field}` || ((f.field === "position" || f.field === "xAft/xFwd") && k.startsWith(`${f.tank}.`)))));
   };
   const corrected = new Set(fixes.filter((f) => f.tank).map((f) => `${f.field === "id" ? f.new : f.tank}.${f.field}`));
-  const setTank = (i: number, patch: Partial<DraftTank>) =>
+  const setTank = (i: number, patch: Partial<DraftTank>) => {
+    // Once a corrected field is edited by hand, its correction can no longer be undone.
+    const id = draft.tanks?.[i]?.id;
+    const keys = Object.keys(patch);
+    setFixes((all) => all.filter((f) => !(f.tank !== null && (f.field === "id" ? f.new : f.tank) === id
+      && (keys.includes(f.field) || ((f.field === "xAft/xFwd" || f.field === "position") && (keys.includes("xAft") || keys.includes("xFwd")))))));
     setDraft((d) => ({ ...d, tanks: (d.tanks ?? []).map((t, j) => (j === i ? { ...t, ...patch } : t)) }));
+  };
   const addTank = () => setDraft((d) => {
     const tanks = d.tanks ?? [];
     const last = tanks[tanks.length - 1];
-    return { ...d, tanks: [...tanks, { id: "", type: "cargo", side: last?.side === "P" ? "S" : "P",
-      xAft: last?.side === "P" ? last.xAft : last?.xFwd ?? null, xFwd: last?.side === "P" ? last.xFwd : null }] };
+    return keyed({ ...d, tanks: [...tanks, { id: "", type: "cargo", side: last?.side === "P" ? "S" : "P",
+      xAft: last?.side === "P" ? last.xAft : last?.xFwd ?? null, xFwd: last?.side === "P" ? last.xFwd : null }] });
   });
   const removeTank = (i: number) => setDraft((d) => ({ ...d, tanks: (d.tanks ?? []).filter((_, j) => j !== i) }));
 
@@ -192,8 +234,10 @@ export default function NewShip({ editId, copyFrom, onCancel, onSaved }: Props) 
     const { layout } = complete(draft);
     if (!layout) return;
     setSaving(true); setSaveError(null);
-    try { onSaved((editId ? await api.updateVessel(editId, layout) : await api.saveVessel(layout)).id); }
-    catch (e) { setSaveError((e as Error).message); }
+    try {
+      const v = editId ? await api.updateVessel(editId, layout) : await api.saveVessel(layout);
+      if (mounted.current) onSaved(v.id);  // not if the person has already left this page
+    } catch (e) { setSaveError((e as Error).message); }
     finally { setSaving(false); }
   };
 
@@ -236,7 +280,7 @@ export default function NewShip({ editId, copyFrom, onCancel, onSaved }: Props) 
               <strong>Drop a drawing here, or choose a file</strong>
               <span className="muted small">PNG, JPEG or WebP up to 5 MB. You can also paste an image.</span>
               <input id="src-image" type="file" accept="image/png,image/jpeg,image/webp" className="visually-hidden"
-                onChange={(e) => takeImage(e.target.files?.[0])} />
+                onChange={(e) => { takeImage(e.target.files?.[0]); e.target.value = ""; }} />
             </label>
             {imageError && <p className="error">{imageError}</p>}
             {image && (
@@ -247,7 +291,7 @@ export default function NewShip({ editId, copyFrom, onCancel, onSaved }: Props) 
                     style={{ left: `${s.box[0] * 100}%`, top: `${s.box[1] * 100}%`,
                       width: `${(s.box[2] - s.box[0]) * 100}%`, height: `${(s.box[3] - s.box[1]) * 100}%` }} />
                 ))}
-                <button className="link" onClick={() => { setImage(null); setSegments([]); }}>Remove image</button>
+                <button className="link" onClick={() => { imageSeq.current++; setImage(null); setSegments([]); }}>Remove image</button>
               </div>
             )}
           </div>
@@ -256,24 +300,25 @@ export default function NewShip({ editId, copyFrom, onCancel, onSaved }: Props) 
           <button className="primary" onClick={read} disabled={reading || (!text.trim() && !image)}>
             <Icon name="sparkle" size={18} /> {reading ? "Reading…" : "Read with AI"}
           </button>
-          <button onClick={() => loadLayout("demo_mr2", true)}>Start from demo layout</button>
-          <button onClick={() => { setDraft(EMPTY); setNotes([]); }}>Start blank</button>
+          {!editId && <button onClick={() => loadLayout("demo_mr2", true)} disabled={reading}>Start from demo layout</button>}
+          <button onClick={() => { resetReadState(); setLoadError(null); setDraft(EMPTY); }} disabled={reading}>Start blank</button>
         </div>
         {progress && (
           <BuildProgress step={progress.step} status={progress.status} startedAt={progress.startedAt}
-            message={progress.message} onCancel={cancelRead} />
+            message={progress.message} onCancel={reading ? cancelRead : undefined} />
         )}
         {readError && !progress && <p className="error">{readError}</p>}
+        {loadError && <p className="error">{loadError}</p>}
         {checks.length > 0 && (
           <div className="note-group">
             <h3><Icon name="gauge" size={16} /> Checks</h3>
-            <ul className="warnings">{checks.map((n) => <li key={n}>{n}</li>)}</ul>
+            <ul className="warnings">{checks.map((n, i) => <li key={i}>{n}</li>)}</ul>
           </div>
         )}
         {notes.length > 0 && (
           <div className="note-group">
             <h3><Icon name="sparkle" size={16} /> From the AI</h3>
-            <ul className="warnings ai">{notes.map((n) => <li key={n}>{n}</li>)}</ul>
+            <ul className="warnings ai">{notes.map((n, i) => <li key={i}>{n}</li>)}</ul>
           </div>
         )}
         {fixes.length > 0 && (
@@ -320,6 +365,8 @@ export default function NewShip({ editId, copyFrom, onCancel, onSaved }: Props) 
 
       <section className="card" aria-labelledby="layout-h">
         <h2 id="layout-h">Layout</h2>
+        {/* Locked while the AI reads, because its result replaces the whole layout. */}
+        <fieldset className="plain-fieldset" disabled={reading}>
         <div className="particulars">
           <label>Name
             <input value={draft.name ?? ""} className={!draft.name?.trim() ? "needs" : undefined}
@@ -343,7 +390,7 @@ export default function NewShip({ editId, copyFrom, onCancel, onSaved }: Props) 
             <thead><tr><th>Id</th><th>Type</th><th>Side</th><th>x aft</th><th>x fwd</th><th>Capacity m³</th><th>Line</th><th /></tr></thead>
             <tbody>
               {(draft.tanks ?? []).map((t, i) => (
-                <tr key={i}>
+                <tr key={(t as Row)._k ?? i}>
                   <td><input aria-label={`Tank ${i + 1} id`} value={t.id ?? ""} className={!t.id ? "needs" : undefined}
                     onChange={(e) => setTank(i, { id: e.target.value.toUpperCase() })} /></td>
                   <td>
@@ -377,11 +424,13 @@ export default function NewShip({ editId, copyFrom, onCancel, onSaved }: Props) 
         <p className="muted small">Leave capacity empty to use a typical tank shape. Bunker and fresh water tanks are added aft if the layout has none.</p>
         <div className="presets">
           <button onClick={addTank}>Add tank</button>
-          <button className="primary" onClick={save} disabled={!ready || saving}>
+          <button className="primary" onClick={save} disabled={!ready || !preview || previewing || saving}
+            title={ready && !preview && !previewing ? "The vessel has to build before it can be saved." : undefined}>
             {saving && <span className="spinner" aria-hidden="true" />}
             {saving ? "Saving the ship…" : editId ? "Save changes" : "Save ship"}
           </button>
         </div>
+        </fieldset>
         {saveError && <p className="error">{saveError}</p>}
       </section>
     </>

@@ -26,9 +26,22 @@ class Parcel(BaseModel):
     grade: str
     quantity_t: float | None = None
     quantity_m3: float | None = None
+    quantity_bbl: float | None = None
+    mass_basis: Literal["air", "vacuum"] | None = None   # what the tonnes mean; None = in air
     density_t_m3: float | None = None
+    density_temp_c: float | None = None                  # temperature the density was measured at; None = 15 °C
+    api: float | None = None
+    temp_c: float | None = None                          # cargo temperature at loading
     load_port: str | None = None
     discharge_port: str | None = None
+
+
+class ParcelUpdate(BaseModel):
+    """A change to the cargo's conditions asked for when replanning ("cargo temperature 35 C")."""
+    grade: str | None = None  # None = every parcel
+    temp_c: float | None = None
+    density_t_m3: float | None = None
+    density_temp_c: float | None = None
 
 
 class ParseOrderIn(BaseModel):
@@ -43,6 +56,10 @@ class ParseOrderOut(BaseModel):
 class ExplainIn(BaseModel):
     result: dict
     question: str | None = None
+
+
+class CleaningIn(BaseModel):
+    cleaning: dict  # the plan's cleaning report (plan.cleaning)
 
 
 class ExplainOut(BaseModel):
@@ -165,6 +182,7 @@ class ConstraintsIn(BaseModel):
     empty_tanks: list[str] = []
     fixed_grades: dict[str, str] = {}
     max_trim_m: float | None = Field(default=None, gt=0, le=10)
+    fill: Literal["full", "even"] | None = None  # "even": spread each grade over all its tanks at the same fill %
 
 
 class PlanIn(BaseModel):
@@ -191,7 +209,7 @@ class ApproveIn(BaseModel):
     explanation: str | None = Field(default=None, max_length=4000)
 
 
-MemoryKind = Literal["constraint_empty", "constraint_fixed", "max_trim", "grade_alias", "note", "explain_style"]
+MemoryKind = Literal["constraint_empty", "constraint_fixed", "max_trim", "fill_mode", "grade_alias", "note", "explain_style"]
 
 
 class MemoryOp(BaseModel):
@@ -207,6 +225,7 @@ class InstructionOut(BaseModel):
     constraints: ConstraintsIn
     notes: list[str] = []
     memory: list[MemoryOp] = []
+    parcel_updates: list[ParcelUpdate] = []
 
 
 class MemoryNoteIn(BaseModel):

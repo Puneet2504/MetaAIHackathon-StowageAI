@@ -5,6 +5,7 @@ import { gradeById } from "./grades";
 export interface TankState {
   grade: string | null;
   fillPct: number;
+  density?: number; // t/m3 from the plan, when it differs from the grade library
 }
 
 interface Props {

@@ -7,6 +7,9 @@ const W = 340, H = 180, L = 36, R = 10, T = 12, B = 28;
 
 export default function GzChart({ angles, gz }: Props) {
   const maxA = angles[angles.length - 1];
+  const usable = angles.length > 1 && gz.length === angles.length && maxA > 0
+    && [...angles, ...gz].every((v) => Number.isFinite(v));
+  if (!usable) return <p className="muted small">No GZ curve to show for this condition.</p>;
   const lo = Math.min(0, ...gz), hi = Math.max(0.5, ...gz);
   const x = (a: number) => L + (a / maxA) * (W - L - R);
   const y = (v: number) => T + ((hi - v) / (hi - lo)) * (H - T - B);
@@ -16,7 +19,7 @@ export default function GzChart({ angles, gz }: Props) {
     <svg className="gz" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Righting lever (GZ) curve">
       <line x1={L} x2={W - R} y1={y(0)} y2={y(0)} className="gz-axis" />
       <line x1={L} x2={L} y1={T} y2={H - B} className="gz-axis" />
-      <line x1={x(30)} x2={W - R} y1={y(0.2)} y2={y(0.2)} className="gz-req" />
+      <line x1={x(Math.min(30, maxA))} x2={W - R} y1={y(0.2)} y2={y(0.2)} className="gz-req" />
       <text x={W - R} y={y(0.2) - 4} textAnchor="end" className="gz-label">GZ 0.20 m from 30°</text>
       <polygon points={`${x(angles[0])},${y(0)} ${pts} ${x(maxA)},${y(0)}`} className="gz-area" />
       <polyline points={pts} className="gz-line" />

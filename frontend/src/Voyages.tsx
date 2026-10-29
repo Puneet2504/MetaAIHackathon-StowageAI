@@ -29,7 +29,7 @@ export default function Voyages({ onOpen, onShips }: Props) {
   const shown = useMemo(() => {
     const term = q.trim().toLowerCase();
     if (!voyages || !term) return voyages ?? [];
-    return voyages.filter((v) => [v.vessel_name, ...v.voyage.load_ports, ...v.voyage.discharge_ports,
+    return voyages.filter((v) => [v.vessel_name, v.vessel_id, ...v.voyage.load_ports, ...v.voyage.discharge_ports,
       ...v.voyage.grades.map((g) => g.grade)].some((s) => s?.toLowerCase().includes(term)));
   }, [voyages, q]);
 
@@ -74,8 +74,8 @@ export default function Voyages({ onOpen, onShips }: Props) {
               </div>
               <Route from={v.voyage.load_ports} to={v.voyage.discharge_ports} />
               <div className="chips">
-                {v.voyage.grades.map((g) => (
-                  <span key={g.grade} className="chip">
+                {v.voyage.grades.map((g, i) => (
+                  <span key={i} className="chip">
                     <span className="swatch" style={{ background: gradeById(g.grade_id)?.color ?? "var(--g-other)" }} />
                     {g.grade} · {g.tonnes.toLocaleString()} t
                   </span>
@@ -85,6 +85,8 @@ export default function Voyages({ onOpen, onShips }: Props) {
                 <span><Icon name="calendar" size={14} /> {new Date(v.approved_at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}</span>
                 <span>{v.voyage.total_t.toLocaleString()} t in total</span>
                 {v.voyage.gm_m !== null && <span>GM {v.voyage.gm_m.toFixed(2)} m</span>}
+                {!!v.voyage.tanks_to_clean && <span className="clean-chip">{v.voyage.tanks_to_clean} tanks to clean
+                  {v.voyage.cleaning_hours ? ` (~${v.voyage.cleaning_hours} h)` : ""}</span>}
                 {v.voyage.trim_m !== null && <span>Trim {Math.abs(v.voyage.trim_m).toFixed(2)} m</span>}
               </div>
             </button>

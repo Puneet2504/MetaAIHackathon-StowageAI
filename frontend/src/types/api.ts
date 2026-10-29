@@ -39,8 +39,31 @@ export interface Parcel {
   quantity_t: number | null;
   quantity_m3: number | null;
   density_t_m3: number | null;
+  quantity_bbl?: number | null;
+  mass_basis?: "air" | "vacuum" | null;
+  density_temp_c?: number | null;
+  api?: number | null;
+  temp_c?: number | null;        // cargo temperature at loading
   load_port: string | null;
   discharge_port: string | null;
+}
+
+// How an ordered quantity became tank volume (backend app/stowage/quantities.py).
+export interface Conversion {
+  ordered: string;
+  basis: "air" | "vacuum";
+  temp_c: number;
+  temp_source: string;      // "order", "<port> average" or "typical for the grade"
+  density15: number;
+  density_source: string;   // starts with "order", or "typical for the grade"
+  density_at_temp: number;
+  vcf: number;
+  volume15_m3: number;
+  volume_m3: number;        // room taken in the tanks at cargo temperature
+  tonnes: number;
+  tonnes_air: number;
+  tonnes_vacuum: number;
+  assumed: string[];
 }
 
 export interface VesselSummary {
@@ -119,6 +142,7 @@ export interface StowageConstraints {
   empty_tanks: string[];
   fixed_grades: Record<string, string>;
   max_trim_m: number | null;
+  fill?: "even" | "full" | null; // "even": each grade spread over all its tanks at one level
 }
 
 export interface Allocation {
@@ -131,6 +155,51 @@ export interface Allocation {
   unallocated_m3: number;
   lines: string[];
   tanks: string[];
+  tonnes?: number;          // placed, in the order's basis (older voyages lack it)
+  conversion?: Conversion;
+}
+
+// A tank that changes grade, and what it needs first (backend app/stowage/cleaning.py).
+export interface TankCleaning {
+  tank: string;
+  prev: string;
+  prev_name: string;
+  next: string;
+  next_name: string;
+  source: string;
+  level: 0 | 1 | 2 | 3;
+  key: "none" | "drain" | "wash" | "full_wash";
+  label: string;
+  reason: string;
+  steps: string[];
+  checks: string[];
+}
+
+export interface CleaningEstimate {
+  hours: number;      // time at the port for cleaning (typical estimate)
+  cost_usd: number;
+  tanks?: number;
+}
+
+export interface CleaningReport {
+  ports: { port: string; when: string; source: string; changes: TankCleaning[]; checks: string[]; estimate?: CleaningEstimate }[];
+  last_voyage: { id: string; date: string; last_port: string | null } | null;
+  tanks_to_clean: number;
+  total?: CleaningEstimate;
+  // Cleaning saved by choosing the first port's tanks with a later port's cargo in mind.
+  saving?: (CleaningEstimate & { tanks: number; port: string; compared_to: string }) | null;
+}
+
+// A later port where emptied tanks are reloaded: the cargo loaded there and the condition on leaving.
+export interface PlanStage {
+  port: string;
+  discharged: string[];
+  status: string;
+  message: string;
+  allocation: Allocation[];
+  loads: TankLoad[];
+  result: StabilityResult | null;
+  warnings: string[];
 }
 
 export interface StowagePlan {
@@ -142,9 +211,11 @@ export interface StowagePlan {
   candidates_checked: number;
   candidates_total: number;
   warnings: string[];
+  stages?: PlanStage[];
+  cleaning?: CleaningReport;
 }
 
-export type MemoryKind = "constraint_empty" | "constraint_fixed" | "max_trim" | "grade_alias" | "note" | "explain_style";
+export type MemoryKind = "constraint_empty" | "constraint_fixed" | "max_trim" | "fill_mode" | "grade_alias" | "note" | "explain_style";
 
 export interface MemoryItem {
   id: string;
@@ -182,6 +253,8 @@ export interface VoyageSummary {
   trim_m: number | null;
   passed: boolean;
   status: string | null;
+  tanks_to_clean?: number;
+  cleaning_hours?: number;
 }
 
 export interface VoyageListItem {

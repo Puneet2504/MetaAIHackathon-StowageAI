@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import type { View } from "./App";
 import Icon from "./Icons";
@@ -14,15 +14,20 @@ const ORIGIN: Record<string, string> = { synthetic: "Built-in demo", user_drawin
 export default function ShipLibrary({ onOpen }: Props) {
   const [ships, setShips] = useState<VesselSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const deletingRef = useRef(false);
 
-  const load = () => api.vessels().then(setShips)
+  const load = () => api.vessels().then((r) => { setShips(r); setError(null); })
     .catch((e) => setError(`Couldn't load ships. Is the backend running on port 8000? (${e.message})`));
   useEffect(() => { load(); }, []);
 
   const remove = async (s: VesselSummary) => {
-    if (!window.confirm(`Delete ${s.name}? This cannot be undone.`)) return;
-    try { await api.deleteVessel(s.id); load(); }
+    if (deletingRef.current || !window.confirm(`Delete ${s.name}? This cannot be undone.`)) return;
+    deletingRef.current = true;
+    setDeleting(s.id); setError(null);
+    try { await api.deleteVessel(s.id); await load(); }
     catch (e) { setError((e as Error).message); }
+    finally { deletingRef.current = false; setDeleting(null); }
   };
 
   return (
@@ -57,7 +62,7 @@ export default function ShipLibrary({ onOpen }: Props) {
                 {s.owned
                   ? <>
                       <button onClick={() => onOpen({ kind: "edit", id: s.id })}>Edit</button>
-                      <button onClick={() => remove(s)}>Delete</button>
+                      <button onClick={() => remove(s)} disabled={deleting === s.id}>{deleting === s.id ? "Deleting…" : "Delete"}</button>
                     </>
                   : <button onClick={() => onOpen({ kind: "edit", copyFrom: s.id })}>Copy as new</button>}
               </div>
