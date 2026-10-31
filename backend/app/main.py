@@ -10,9 +10,9 @@ from . import config, memory, users, vessels
 from .engine.stability import StabilityError, TankLoad, calculate, calculate_sequence
 from .llm import client, plain, prompts, segment, tasks, usage
 from .llm.digest import cleaning_digest, stability_digest
-from .schemas import (ApproveIn, CleaningIn, ConditionIn, ExplainIn, ExplainOut, LayoutIn, MemoryNoteIn, MemoryPatchIn,
+from .schemas import (AddToVoyageIn, ApproveIn, VoyageCheckIn, CleaningIn, ConditionIn, ExplainIn, ExplainOut, LayoutIn, MemoryNoteIn, MemoryPatchIn,
                       ParseOrderIn, ParseOrderOut, PlanIn, ReadDrawingIn, ReadDrawingOut, SequenceIn, SignInIn)
-from .stowage import pipeline
+from .stowage import ballast, open_space, pipeline
 from .users import current_user
 from .vessel_builder import build_vessel, layout_from_vessel
 
@@ -122,7 +122,10 @@ def delete_vessel(vessel_id: str, user: str = Depends(current_user)):
 @app.post("/api/stability/check")
 def check(body: ConditionIn, user: str = Depends(current_user)):
     try:
-        return calculate(_vessel(body.vessel_id, user), _loads(body.loads), body.include_constants).to_dict()
+        vessel, loads = _vessel(body.vessel_id, user), _loads(body.loads)
+        result = calculate(vessel, loads, body.include_constants).to_dict()
+        result["ballast"] = ballast.preview(vessel, loads)  # how to bring the trim back to normal; a preview only
+        return result
     except StabilityError as e:
         raise HTTPException(422, str(e))
 
@@ -154,7 +157,34 @@ def plan_voyage(body: PlanIn, user: str = Depends(current_user)):
 @app.post("/api/stowage/plans", status_code=201)
 def approve_plan(body: ApproveIn, user: str = Depends(current_user)):
     vessel = _vessel(body.vessel_id, user)
+    # The voyage check runs again here, so a plan that traps cargo or is unsafe after a port can't be approved.
+    if problem := pipeline.blocking_issue(vessel, body.parcels, body.plan):
+        raise HTTPException(409, f"Not approved: {problem}")
     return pipeline.approve(user, body.model_dump(), vessel)
+
+
+@app.post("/api/stowage/check")
+def check_voyage(body: VoyageCheckIn, user: str = Depends(current_user)):
+    """Check a hand-edited condition through the order's ports; suggests tank swaps when something is blocked."""
+    vessel = _vessel(body.vessel_id, user)
+    out = pipeline.check_condition(vessel, body.parcels, [l.model_dump() for l in body.loads], memory.aliases(user))
+    return {"check": out["check"], "allocation": out["allocation"], "result": out["result"]}
+
+
+@app.post("/api/stowage/plans/manual", status_code=201)
+def approve_manual(body: VoyageCheckIn, user: str = Depends(current_user)):
+    """Approve a hand-edited condition. The server rebuilds and re-checks it; it never trusts the client's verdict."""
+    vessel = _vessel(body.vessel_id, user)
+    out = pipeline.check_condition(vessel, body.parcels, [l.model_dump() for l in body.loads], memory.aliases(user))
+    if not out["check"]["ok"] or not out["plan"]:
+        problem = next((i["message"] for i in out["check"]["issues"] if i["severity"] == "block"), "the voyage check failed")
+        raise HTTPException(409, f"Not approved: {problem}")
+    if not (out["result"] or {}).get("all_passed"):
+        raise HTTPException(409, "Not approved: the condition fails its stability checks.")
+    return pipeline.approve(user, {"vessel_id": body.vessel_id, "order_text": body.order_text,
+                                   "parcels": [p.model_dump() for p in body.parcels],
+                                   "constraints": {"empty_tanks": [], "fixed_grades": {}, "max_trim_m": None},
+                                   "plan": out["plan"], "explanation": None}, vessel)
 
 
 @app.get("/api/stowage/plans")
@@ -163,6 +193,56 @@ def list_plans(vessel_id: str | None = None, user: str = Depends(current_user)):
 
 
 # ---------- voyages (approved plans) ----------
+
+# ---------- open space for charterers ----------
+
+def _open_space(vessel: dict, user: str) -> dict:
+    rec = pipeline.current_voyage(user, vessel["id"])
+    p = vessel.get("particulars") or {}
+    out = {"vessel_id": vessel["id"], "vessel_name": p.get("name"), "size_class": p.get("sizeClass"), "voyage": None}
+    if rec:
+        out["voyage"] = {"id": rec["id"], "approved_at": rec["approved_at"], "order_text": rec.get("order_text"),
+                         "route": {k: rec["voyage"][k] for k in ("load_ports", "discharge_ports")},
+                         "facts": open_space.voyage_facts(vessel, rec)}
+    return out
+
+
+@app.get("/api/open-space")
+def open_space_all(user: str = Depends(current_user)):
+    """Every ship with its current (latest approved) voyage and what is empty after each port. No AI."""
+    return [_open_space(vessels.get(v["id"], user), user) for v in vessels.list_for(user)]
+
+
+@app.get("/api/open-space/{vessel_id}")
+def open_space_one(vessel_id: str, user: str = Depends(current_user)):
+    return _open_space(_vessel(vessel_id, user), user)
+
+
+@app.post("/api/open-space/{vessel_id}/suggest")
+def open_space_suggest(vessel_id: str, user: str = Depends(current_user)):
+    """The AI chooses what a charterer could add (grade, tanks, quantity) and checks it itself.
+    Each suggestion then gets a safety label from the voyage check; nothing is changed or filtered."""
+    vessel = _vessel(vessel_id, user)
+    space = _open_space(vessel, user)
+    if not space["voyage"]:
+        return {**space, "ai": None, "message": "This ship has no current voyage: the whole ship is open."}
+    rec = pipeline.current_voyage(user, vessel_id)
+    facts = space["voyage"]["facts"]
+    if not config.model_configured():
+        return {**space, "ai": None, "message": "AI suggestions unavailable: no model is configured."}
+    try:
+        with usage.track(user):
+            out = tasks.open_space(facts, open_space.tank_ids(vessel))
+    except client.ModelError as e:
+        return {**space, "ai": None, "message": f"AI suggestions unavailable: {e}"}
+    suggestions = []
+    for s in out.suggestions:
+        d = s.model_dump()
+        d["order_line"] = f"Load {d['port']}: {d['quantity_t']:,.0f} mt {d['grade']} for {d['discharge_port']}."
+        d["check"] = open_space.verify(vessel, rec, facts, d)
+        suggestions.append(d)
+    return {**space, "ai": {"summary": out.summary, "suggestions": suggestions}, "message": None}
+
 
 @app.get("/api/voyages")
 def list_voyages(vessel_id: str | None = None, user: str = Depends(current_user)):
@@ -176,6 +256,23 @@ def get_voyage(voyage_id: str, user: str = Depends(current_user)):
         raise HTTPException(404, "Voyage not found")
     v["vessel"] = vessels.get(v["vessel_id"], user)  # None if the ship was deleted since
     return v
+
+
+@app.post("/api/voyages/{voyage_id}/add")
+def add_to_voyage(voyage_id: str, body: AddToVoyageIn, user: str = Depends(current_user)):
+    """Add a verified open-space suggestion to the ship's current voyage (same voyage, nothing replanned)."""
+    record = pipeline.get_voyage(user, voyage_id)
+    if record is None:
+        raise HTTPException(404, "Voyage not found")
+    current = pipeline.current_voyage(user, record["vessel_id"])
+    if not current or current["id"] != voyage_id:
+        raise HTTPException(409, "Only the ship's current voyage can take extra cargo.")
+    vessel = _vessel(record["vessel_id"], user)
+    try:
+        updated = pipeline.amend_voyage(user, vessel, record, body.suggestion.model_dump(), body.order_line)
+    except ValueError as e:
+        raise HTTPException(409, f"Not added: {e}")
+    return {**updated, "vessel": vessel}
 
 
 @app.delete("/api/voyages/{voyage_id}", status_code=204)

@@ -3,8 +3,13 @@
 Each task keeps its input small: compact JSON, at most a few remembered "Memory:" lines,
 and an output cap. Simple instructions are handled by code first (fast_paths) at no token cost.
 """
+import re
+from typing import Literal
+
+from pydantic import Field, create_model
+
 from .. import config
-from ..schemas import DrawingReadOut, InstructionOut, ParseOrderOut
+from ..schemas import DrawingReadOut, InstructionOut, OpenSpaceOut, ParseOrderOut, SpaceSuggestion
 from . import client, drawing_fixes, fast_paths, prompts, usage
 from .digest import compact, for_model
 
@@ -35,8 +40,9 @@ def read_drawing(text: str | None, image: str | None = None, segments: list | No
 
 
 def read_instruction(instruction: str, cargo_tanks: list[str], grades: list[str], current: dict,
-                     model: str | None = None, memory_lines: list[str] | None = None) -> InstructionOut:
-    quick = fast_paths.try_instruction(instruction, cargo_tanks, grades, current)
+                     model: str | None = None, memory_lines: list[str] | None = None,
+                     aliases: dict[str, str] | None = None) -> InstructionOut:
+    quick = fast_paths.try_instruction(instruction, cargo_tanks, grades, current, aliases)
     if quick is not None:
         usage.record(skipped=True)
         return quick
@@ -45,10 +51,31 @@ def read_instruction(instruction: str, cargo_tanks: list[str], grades: list[str]
                              InstructionOut, model=model, max_tokens=config.MAX_TOKENS_JSON)
 
 
+def open_space(facts: dict, tank_ids: list[str], model: str | None = None) -> OpenSpaceOut:
+    """The AI chooses what else fits on a ship's current voyage: grade, tanks and quantity, checking each itself.
+
+    The reply schema only accepts the ship's real tank ids, so an invented tank is sent back for correction.
+    """
+    tank = Literal[tuple(tank_ids)]  # type: ignore[valid-type]
+    suggestion = create_model("ShipSpaceSuggestion", __base__=SpaceSuggestion, tanks=(list[tank], Field(min_length=1)))
+    schema = create_model("ShipOpenSpaceOut", __base__=OpenSpaceOut, suggestions=(list[suggestion], []))
+    return client.chat_model(prompts.OPEN_SPACE_SYSTEM, compact(facts), schema, model=model,
+                             max_tokens=config.MAX_TOKENS_OPEN_SPACE, effort=config.REASONING_EFFORT_OPEN_SPACE)
+
+
 def cleaning_checklist(digest: dict) -> str:
     return client.chat_text(prompts.CLEANING_SYSTEM, compact(digest), max_tokens=config.MAX_TOKENS_CHECKLIST)
 
 
+def _check_explanation(text: str) -> None:
+    """Reject a reply that is cut off or missing its parts, so callers fall back to the built-in explanation."""
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    last = re.sub(r"^[-*\u2022]\s*", "", lines[-1]) if lines else ""
+    if "Why:" not in text or "What to do:" not in text or not last.endswith((".", "!", "?", ")")):
+        raise client.ModelError("Incomplete explanation")
+
+
 def explain(system: str, digest: dict, memory_lines: list[str] | None = None, question: str | None = None) -> str:
     user = compact(for_model(digest)) +(f"\nQuestion: {question.strip()}" if question else "")
-    return client.chat_text(system, _with_memory(user, memory_lines), max_tokens=config.MAX_TOKENS_EXPLAIN)
+    return client.chat_text(system, _with_memory(user, memory_lines), max_tokens=config.MAX_TOKENS_EXPLAIN,
+                            validate=_check_explanation)

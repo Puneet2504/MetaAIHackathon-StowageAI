@@ -19,7 +19,7 @@ from app.llm import cache, client, tasks, usage
 from .score import SCORERS
 
 HERE = Path(__file__).resolve().parent
-SUITES = ("orders", "drawings", "instructions")
+SUITES = ("orders", "drawings", "instructions", "openspace")
 
 
 def load_cases(suite: str) -> list[dict]:
@@ -33,14 +33,27 @@ def run_case(suite: str, case: dict, model: str | None) -> dict:
         return tasks.read_order(case["input"], model=model).model_dump()
     if suite == "drawings":
         return tasks.read_drawing(case["input"], model=model).model_dump()
+    if suite == "openspace":
+        ids = sorted({t for e in case["context"]["ports"][0]["empty"] for t in _pairs(e["tanks"])} |
+                     {t for line in case["context"]["lines"].values() for t in _pairs(line)})
+        return tasks.open_space(case["context"], ids, model=model).model_dump()
     ctx = case["context"]
     return tasks.read_instruction(case["input"], ctx["cargo_tanks"], ctx["grades"], ctx["current"],
                                   model=model).model_dump()
 
 
+def _pairs(text: str) -> list[str]:
+    out = []
+    for part in text.split(", "):
+        out += [part[:-4] + "P", part[:-4] + "S"] if part.endswith(" P/S") else [part]
+    return out
+
+
 def dry_answer(suite: str, case: dict) -> dict:
     """The expected answer in the model's output shape, to check the scorer."""
     exp = case["expected"]
+    if suite == "openspace":
+        return {"summary": "dry run", "suggestions": exp["suggestions"]}
     notes = ["dry run note"] if exp.get("needs_note") else []
     key = {"orders": "parcels", "drawings": "layout", "instructions": "constraints"}[suite]
     return {key: exp[key], "notes": notes}
@@ -73,7 +86,8 @@ def main(argv: list[str] | None = None) -> int:
             with usage.track() as used:
                 try:
                     answer = dry_answer(suite, case) if args.dry_run else run_case(suite, case, args.model)
-                    problems = SCORERS[suite](case["expected"], answer)
+                    extra = (case["context"],) if suite == "openspace" else ()  # checked against the voyage facts
+                    problems = SCORERS[suite](case["expected"], answer, *extra)
                 except client.ModelError as e:
                     answer, problems = None, [f"model error: {e}"]
             rows.append({"id": case["id"], "passed": not problems, "problems": problems,

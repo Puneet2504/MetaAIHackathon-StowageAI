@@ -56,11 +56,11 @@ def _tanks(text: str, cargo_tanks: list[str]) -> tuple[list[str], list[str]] | N
     return (found, unknown) if found or unknown else None
 
 
-def _grade(name: str, grades: list[str]) -> str | None:
-    """The order's grade name the planner meant, or None."""
-    want = match_grade(name)
+def _grade(name: str, grades: list[str], aliases: dict[str, str] | None = None) -> str | None:
+    """The order's grade name the planner meant, or None. `aliases` are the planner's remembered names."""
+    want = match_grade(name, aliases)
     for g in grades:
-        if g.lower() == name.strip().lower() or (want and (mg := match_grade(g)) and mg.id == want.id):
+        if g.lower() == name.strip().lower() or (want and (mg := match_grade(g, aliases)) and mg.id == want.id):
             return g
     return None
 
@@ -72,7 +72,7 @@ DENSITY = re.compile(r"(?:(?P<grade>.+?)\s+)?(?:density|dens)\s*(?:is|of|=|:)?\s
                      r"(?:\s*(?:t/m3|kg/m3|kg/l))?(?:\s+at\s+(?P<t>-?\d+(?:\.\d+)?)\s*(?:°\s*c|c)?)?", re.I)
 
 
-def _condition(clause: str, grades: list[str]) -> ParcelUpdate | None:
+def _condition(clause: str, grades: list[str], aliases: dict[str, str] | None = None) -> ParcelUpdate | None:
     """A change to cargo temperature or density, or None if the clause is about something else."""
     for rx, kind in ((DENSITY, "density"), (TEMP, "temp")):
         m = rx.fullmatch(clause)
@@ -82,7 +82,7 @@ def _condition(clause: str, grades: list[str]) -> ParcelUpdate | None:
         name = re.sub(r"^(?:the|set|make|use|assume|with)\b\s*|\s*\b(?:cargo|is|has)$", "", name, flags=re.I).strip()
         grade = None
         if name and name.lower() not in ("cargo", "all", "the", "the cargo", "all cargo"):
-            grade = _grade(name, grades)
+            grade = _grade(name, grades, aliases)
             if grade is None:
                 return None
         if kind == "temp":
@@ -96,7 +96,8 @@ def _condition(clause: str, grades: list[str]) -> ParcelUpdate | None:
     return None
 
 
-def try_instruction(text: str, cargo_tanks: list[str], grades: list[str], current: dict) -> InstructionOut | None:
+def try_instruction(text: str, cargo_tanks: list[str], grades: list[str], current: dict,
+                    aliases: dict[str, str] | None = None) -> InstructionOut | None:
     c = ConstraintsIn.model_validate(current or {})
     empty, fixed, trim, fill = list(c.empty_tanks), dict(c.fixed_grades), c.max_trim_m, c.fill
     notes: list[str] = []
@@ -139,7 +140,7 @@ def try_instruction(text: str, cargo_tanks: list[str], grades: list[str], curren
         clause = clause.strip(" .")
         if not clause:
             continue
-        if u := _condition(clause, grades):
+        if u := _condition(clause, grades, aliases):
             updates.append(u)
         elif f := fill_rule(clause):
             fill = f
@@ -171,7 +172,7 @@ def try_instruction(text: str, cargo_tanks: list[str], grades: list[str], curren
                 memory.append(MemoryOp(op="set", scope="vessel" if vessel_scope else "global", kind="max_trim",
                                        value=trim, text=f"Trim at most {trim:g} m"))
         elif m := re.fullmatch(r"(?:put|load|carry|keep)?\s*(?:the\s+)?(.+?)\s+in\s+(.+)", clause, re.I):
-            grade = _grade(m.group(1), grades)
+            grade = _grade(m.group(1), grades, aliases)
             parsed = _tanks(m.group(2), cargo_tanks)
             if grade is None or parsed is None:
                 return None
@@ -183,7 +184,7 @@ def try_instruction(text: str, cargo_tanks: list[str], grades: list[str], curren
                                            text=f"{tid} carries {grade}"))
             notes += [f"There is no tank {t} on this ship." for t in parsed[1]]
         elif m := re.fullmatch(r"(.+?)\s+(?:means|=|is the same as)\s+(.+)", clause, re.I):
-            target = match_grade(m.group(2))
+            target = match_grade(m.group(2), aliases)
             if target is None:
                 return None
             alias = m.group(1).strip().strip("'\"")

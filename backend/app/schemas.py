@@ -200,6 +200,38 @@ class PlanIn(BaseModel):
         return self
 
 
+class SpaceSuggestion(BaseModel):
+    """Extra cargo the AI suggests a charterer could book on a ship's current voyage."""
+    port: str
+    discharge_port: str
+    grade: str
+    tanks: list[str] = Field(min_length=1)
+    quantity_m3: float = Field(gt=0)
+    quantity_t: float = Field(gt=0)
+    cleaning: str
+    reason: str
+    checks: list[str] = []
+
+
+class OpenSpaceOut(BaseModel):
+    summary: str
+    suggestions: list[SpaceSuggestion] = []
+
+
+class AddToVoyageIn(BaseModel):
+    """An open-space suggestion to add to the ship's current voyage."""
+    suggestion: SpaceSuggestion
+    order_line: str | None = Field(default=None, max_length=300)
+
+
+class VoyageCheckIn(BaseModel):
+    """A hand-edited condition to check (or approve) against the order's ports."""
+    vessel_id: str
+    order_text: str | None = Field(default=None, max_length=8000)
+    parcels: list[Parcel]
+    loads: list[TankLoadIn]
+
+
 class ApproveIn(BaseModel):
     vessel_id: str
     order_text: str | None = Field(default=None, max_length=8000)

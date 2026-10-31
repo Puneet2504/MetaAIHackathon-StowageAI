@@ -5,6 +5,7 @@ import HullPlan, { type TankState } from "./HullPlan";
 import Icon from "./Icons";
 import Cleaning from "./Cleaning";
 import Quantities from "./Quantities";
+import VoyageCheck from "./VoyageCheck";
 import StabilityPanel, { Explanation } from "./StabilityPanel";
 import type { VoyageDetail as Voyage } from "./types/api";
 import { Route } from "./Voyages";
@@ -21,26 +22,32 @@ export default function VoyageDetail({ id, onBack, onPlanAgain }: Props) {
   const [deleting, setDeleting] = useState(false);
   const deletingRef = useRef(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [stageView, setStageView] = useState(0);  // 0: departure condition; n: after the n-th reload port
 
   useEffect(() => {
     api.voyage(id).then((r) => {
-      r.plan.allocation.forEach((a) => addGrade(a.grade_id, a.grade, a.density_t_m3));
+      [...r.plan.allocation, ...(r.plan.stages ?? []).flatMap((s) => s.allocation)]
+        .forEach((a) => addGrade(a.grade_id, a.grade, a.density_t_m3));
       setV(r);
     }).catch((e) => setError(e.message));
   }, [id]);
 
-  // The approved loads, as tank fill states for the read-only drawing.
+  const stages = v?.plan.stages ?? [];
+  const stage = stageView > 0 ? stages[stageView - 1] ?? null : null;
+
+  // The approved loads of the chosen condition, as tank fill states for the read-only drawing.
   const state = useMemo(() => {
     const out: Record<string, TankState> = {};
     if (!v?.vessel) return out;
-    for (const l of v.plan.loads) {
+    for (const l of stage ? stage.loads : v.plan.loads) {
       const t = v.vessel.tanks.find((x) => x.id === l.tank_id);
       if (t && (t.type === "cargo" || t.type === "slop")) {
-        out[t.id] = { grade: l.grade ?? null, fillPct: Math.round((1000 * l.volume_m3) / t.capacity100) / 10 };
+        out[t.id] = { grade: l.grade ?? null, fillPct: Math.round((1000 * l.volume_m3) / t.capacity100) / 10,
+          density: l.density_t_m3 };
       }
     }
     return out;
-  }, [v]);
+  }, [v, stage]);
 
   const remove = async () => {
     if (!v || deletingRef.current || !window.confirm("Delete this voyage? This cannot be undone.")) return;
@@ -62,6 +69,7 @@ export default function VoyageDetail({ id, onBack, onPlanAgain }: Props) {
           <Route from={v.voyage.load_ports} to={v.voyage.discharge_ports} />
           <p className="muted small">
             Approved {new Date(v.approved_at).toLocaleString()} · {v.voyage.total_t.toLocaleString()} t in total
+            {v.plan.manual && <span className="chip manual-chip">Adjusted by hand</span>}
           </p>
         </div>
         <div className="presets">
@@ -79,6 +87,15 @@ export default function VoyageDetail({ id, onBack, onPlanAgain }: Props) {
 
       {v.vessel ? (
         <section className="plan card" aria-label="Approved tank plan">
+          {stages.length > 0 && (
+            <div className="presets stage-picker" role="group" aria-label="Condition shown">
+              {[`Departure ${v.parcels.find((x) => x.load_port)?.load_port ?? "first port"}`, ...stages.map((s) => `After ${s.port}`)]
+                .map((label, i) => (
+                  <button key={label} className={stageView === i ? "primary small-btn" : "small-btn"} aria-pressed={stageView === i}
+                    onClick={() => setStageView(i)}>{label}</button>
+                ))}
+            </div>
+          )}
           <HullPlan vessel={v.vessel} state={state} selected={null} onSelect={() => {}} />
           <ul className="legend">
             {allGrades().filter((g) => v.voyage.grades.some((x) => x.grade_id === g.id)).map((g) => (
@@ -96,9 +113,11 @@ export default function VoyageDetail({ id, onBack, onPlanAgain }: Props) {
             <table>
               <thead><tr><th>Grade</th><th>Tanks</th><th>Lines</th><th className="num">Tonnes</th></tr></thead>
               <tbody>
-                {v.plan.allocation.map((a) => (
+                {[...v.plan.allocation.map((a) => ({ a, at: "" })),
+                  ...stages.flatMap((s) => s.allocation.map((a) => ({ a, at: s.port })))].map(({ a, at }) => (
                   <tr key={a.parcel}>
-                    <td><span className="swatch" style={{ background: gradeById(a.grade_id)?.color }} />{a.grade}</td>
+                    <td><span className="swatch" style={{ background: gradeById(a.grade_id)?.color }} />{a.grade}
+                      {at && <span className="muted small"> · loaded at {at}</span>}</td>
                     <td>{a.tanks.join(", ")}</td>
                     <td>{a.lines.join(", ")}</td>
                     <td className="num">{Math.round(a.tonnes ?? a.allocated_m3 * a.density_t_m3).toLocaleString()}</td>
@@ -108,6 +127,16 @@ export default function VoyageDetail({ id, onBack, onPlanAgain }: Props) {
             </table>
           </div>
           <Quantities allocation={[...v.plan.allocation, ...(v.plan.stages ?? []).flatMap((s) => s.allocation)]} />
+          {(v.plan.amendments ?? []).length > 0 && (
+            <div className="amendments">
+              <h3 className="small">Added later</h3>
+              <ul className="small">
+                {v.plan.amendments!.map((a, i) => (
+                  <li key={i}>{a.line} <span className="muted">· {a.tanks.join(", ")} · {new Date(a.at).toLocaleString()}</span></li>
+                ))}
+              </ul>
+            </div>
+          )}
           {v.explanation && <Explanation text={v.explanation} />}
           {v.order_text && (
             <details className="manual">
@@ -118,9 +147,16 @@ export default function VoyageDetail({ id, onBack, onPlanAgain }: Props) {
         </section>
         <section className="card" aria-labelledby="stab-h">
           <h2 id="stab-h">Stability at approval</h2>
-          {v.plan.result ? <StabilityPanel result={v.plan.result} /> : <p className="muted">No stability result stored.</p>}
+          {stage ? (
+            <>
+              <p className="muted small">Condition on leaving {stage.port}, after discharging {stage.discharged.join(", ") || "cargo"} and
+                loading {stage.allocation.map((a) => a.grade).join(", ")}.</p>
+              {stage.result ? <StabilityPanel result={stage.result} /> : <p className="error">{stage.message}</p>}
+            </>
+          ) : v.plan.result ? <StabilityPanel result={v.plan.result} /> : <p className="muted">No stability result stored.</p>}
         </section>
       </div>
+      {v.plan.voyage_check && <VoyageCheck report={v.plan.voyage_check} />}
       {v.plan.cleaning && <Cleaning report={v.plan.cleaning} />}
     </>
   );

@@ -523,8 +523,8 @@
       "name": "Cargo tank 6 port",
       "type": "cargo",
       "side": "P",
-      "xAft": 33,
-      "xFwd": 53,
+      "xAft": 33.0,
+      "xFwd": 53.0,
       "capacity100": 4340.0,
       "maxFillPct": 98,
       "soundingTable": [
@@ -625,8 +625,8 @@
       "name": "Cargo tank 6 starboard",
       "type": "cargo",
       "side": "S",
-      "xAft": 33,
-      "xFwd": 53,
+      "xAft": 33.0,
+      "xFwd": 53.0,
       "capacity100": 4340.0,
       "maxFillPct": 98,
       "soundingTable": [
@@ -727,8 +727,8 @@
       "name": "Cargo tank 5 port",
       "type": "cargo",
       "side": "P",
-      "xAft": 53,
-      "xFwd": 73,
+      "xAft": 53.0,
+      "xFwd": 73.0,
       "capacity100": 4677.5,
       "maxFillPct": 98,
       "soundingTable": [
@@ -829,8 +829,8 @@
       "name": "Cargo tank 5 starboard",
       "type": "cargo",
       "side": "S",
-      "xAft": 53,
-      "xFwd": 73,
+      "xAft": 53.0,
+      "xFwd": 73.0,
       "capacity100": 4677.5,
       "maxFillPct": 98,
       "soundingTable": [
@@ -931,8 +931,8 @@
       "name": "Cargo tank 4 port",
       "type": "cargo",
       "side": "P",
-      "xAft": 73,
-      "xFwd": 93,
+      "xAft": 73.0,
+      "xFwd": 93.0,
       "capacity100": 4677.5,
       "maxFillPct": 98,
       "soundingTable": [
@@ -1033,8 +1033,8 @@
       "name": "Cargo tank 4 starboard",
       "type": "cargo",
       "side": "S",
-      "xAft": 73,
-      "xFwd": 93,
+      "xAft": 73.0,
+      "xFwd": 93.0,
       "capacity100": 4677.5,
       "maxFillPct": 98,
       "soundingTable": [
@@ -1135,8 +1135,8 @@
       "name": "Cargo tank 3 port",
       "type": "cargo",
       "side": "P",
-      "xAft": 93,
-      "xFwd": 113,
+      "xAft": 93.0,
+      "xFwd": 113.0,
       "capacity100": 4677.5,
       "maxFillPct": 98,
       "soundingTable": [
@@ -1237,8 +1237,8 @@
       "name": "Cargo tank 3 starboard",
       "type": "cargo",
       "side": "S",
-      "xAft": 93,
-      "xFwd": 113,
+      "xAft": 93.0,
+      "xFwd": 113.0,
       "capacity100": 4677.5,
       "maxFillPct": 98,
       "soundingTable": [
@@ -1339,8 +1339,8 @@
       "name": "Cargo tank 2 port",
       "type": "cargo",
       "side": "P",
-      "xAft": 113,
-      "xFwd": 133,
+      "xAft": 113.0,
+      "xFwd": 133.0,
       "capacity100": 4677.5,
       "maxFillPct": 98,
       "soundingTable": [
@@ -1441,8 +1441,8 @@
       "name": "Cargo tank 2 starboard",
       "type": "cargo",
       "side": "S",
-      "xAft": 113,
-      "xFwd": 133,
+      "xAft": 113.0,
+      "xFwd": 133.0,
       "capacity100": 4677.5,
       "maxFillPct": 98,
       "soundingTable": [
@@ -1543,8 +1543,8 @@
       "name": "Cargo tank 1 port",
       "type": "cargo",
       "side": "P",
-      "xAft": 133,
-      "xFwd": 153,
+      "xAft": 133.0,
+      "xFwd": 153.0,
       "capacity100": 4340.0,
       "maxFillPct": 98,
       "soundingTable": [
@@ -1645,8 +1645,8 @@
       "name": "Cargo tank 1 starboard",
       "type": "cargo",
       "side": "S",
-      "xAft": 133,
-      "xFwd": 153,
+      "xAft": 133.0,
+      "xFwd": 153.0,
       "capacity100": 4340.0,
       "maxFillPct": 98,
       "soundingTable": [
@@ -1747,8 +1747,8 @@
       "name": "Slop tank port",
       "type": "slop",
       "side": "P",
-      "xAft": 29,
-      "xFwd": 33,
+      "xAft": 29.0,
+      "xFwd": 33.0,
       "capacity100": 916.2,
       "maxFillPct": 98,
       "soundingTable": [
@@ -1849,8 +1849,8 @@
       "name": "Slop tank starboard",
       "type": "slop",
       "side": "S",
-      "xAft": 29,
-      "xFwd": 33,
+      "xAft": 29.0,
+      "xFwd": 33.0,
       "capacity100": 916.2,
       "maxFillPct": 98,
       "soundingTable": [
@@ -1951,8 +1951,8 @@
       "name": "Water ballast 6 port",
       "type": "ballast",
       "side": "P",
-      "xAft": 33,
-      "xFwd": 53,
+      "xAft": 33.0,
+      "xFwd": 53.0,
       "capacity100": 611.2,
       "maxFillPct": 100,
       "soundingTable": [
@@ -2051,8 +2051,8 @@
       "name": "Water ballast 6 starboard",
       "type": "ballast",
       "side": "S",
-      "xAft": 33,
-      "xFwd": 53,
+      "xAft": 33.0,
+      "xFwd": 53.0,
       "capacity100": 611.2,
       "maxFillPct": 100,
       "soundingTable": [
@@ -2151,8 +2151,8 @@
       "name": "Water ballast 5 port",
       "type": "ballast",
       "side": "P",
-      "xAft": 53,
-      "xFwd": 73,
+      "xAft": 53.0,
+      "xFwd": 73.0,
       "capacity100": 611.2,
       "maxFillPct": 100,
       "soundingTable": [
@@ -2251,8 +2251,8 @@
       "name": "Water ballast 5 starboard",
       "type": "ballast",
       "side": "S",
-      "xAft": 53,
-      "xFwd": 73,
+      "xAft": 53.0,
+      "xFwd": 73.0,
       "capacity100": 611.2,
       "maxFillPct": 100,
       "soundingTable": [
@@ -2351,8 +2351,8 @@
       "name": "Water ballast 4 port",
       "type": "ballast",
       "side": "P",
-      "xAft": 73,
-      "xFwd": 93,
+      "xAft": 73.0,
+      "xFwd": 93.0,
       "capacity100": 611.2,
       "maxFillPct": 100,
       "soundingTable": [
@@ -2451,8 +2451,8 @@
       "name": "Water ballast 4 starboard",
       "type": "ballast",
       "side": "S",
-      "xAft": 73,
-      "xFwd": 93,
+      "xAft": 73.0,
+      "xFwd": 93.0,
       "capacity100": 611.2,
       "maxFillPct": 100,
       "soundingTable": [
@@ -2551,8 +2551,8 @@
       "name": "Water ballast 3 port",
       "type": "ballast",
       "side": "P",
-      "xAft": 93,
-      "xFwd": 113,
+      "xAft": 93.0,
+      "xFwd": 113.0,
       "capacity100": 611.2,
       "maxFillPct": 100,
       "soundingTable": [
@@ -2651,8 +2651,8 @@
       "name": "Water ballast 3 starboard",
       "type": "ballast",
       "side": "S",
-      "xAft": 93,
-      "xFwd": 113,
+      "xAft": 93.0,
+      "xFwd": 113.0,
       "capacity100": 611.2,
       "maxFillPct": 100,
       "soundingTable": [
@@ -2751,8 +2751,8 @@
       "name": "Water ballast 2 port",
       "type": "ballast",
       "side": "P",
-      "xAft": 113,
-      "xFwd": 133,
+      "xAft": 113.0,
+      "xFwd": 133.0,
       "capacity100": 611.2,
       "maxFillPct": 100,
       "soundingTable": [
@@ -2851,8 +2851,8 @@
       "name": "Water ballast 2 starboard",
       "type": "ballast",
       "side": "S",
-      "xAft": 113,
-      "xFwd": 133,
+      "xAft": 113.0,
+      "xFwd": 133.0,
       "capacity100": 611.2,
       "maxFillPct": 100,
       "soundingTable": [
@@ -2951,8 +2951,8 @@
       "name": "Water ballast 1 port",
       "type": "ballast",
       "side": "P",
-      "xAft": 133,
-      "xFwd": 153,
+      "xAft": 133.0,
+      "xFwd": 153.0,
       "capacity100": 611.2,
       "maxFillPct": 100,
       "soundingTable": [
@@ -3051,8 +3051,8 @@
       "name": "Water ballast 1 starboard",
       "type": "ballast",
       "side": "S",
-      "xAft": 133,
-      "xFwd": 153,
+      "xAft": 133.0,
+      "xFwd": 153.0,
       "capacity100": 611.2,
       "maxFillPct": 100,
       "soundingTable": [
@@ -3151,8 +3151,8 @@
       "name": "Forepeak tank",
       "type": "ballast",
       "side": "C",
-      "xAft": 160,
-      "xFwd": 172,
+      "xAft": 160.0,
+      "xFwd": 172.0,
       "capacity100": 950.4,
       "maxFillPct": 100,
       "soundingTable": [
@@ -3251,8 +3251,8 @@
       "name": "Fuel oil port",
       "type": "fuel_oil",
       "side": "P",
-      "xAft": 18,
-      "xFwd": 26,
+      "xAft": 18.0,
+      "xFwd": 26.0,
       "capacity100": 547.2,
       "maxFillPct": 98,
       "soundingTable": [
@@ -3351,8 +3351,8 @@
       "name": "Fuel oil starboard",
       "type": "fuel_oil",
       "side": "S",
-      "xAft": 18,
-      "xFwd": 26,
+      "xAft": 18.0,
+      "xFwd": 26.0,
       "capacity100": 547.2,
       "maxFillPct": 98,
       "soundingTable": [
@@ -3451,8 +3451,8 @@
       "name": "Diesel oil",
       "type": "diesel_oil",
       "side": "C",
-      "xAft": 14,
-      "xFwd": 18,
+      "xAft": 14.0,
+      "xFwd": 18.0,
       "capacity100": 182.4,
       "maxFillPct": 98,
       "soundingTable": [
@@ -3551,8 +3551,8 @@
       "name": "Fresh water",
       "type": "fresh_water",
       "side": "C",
-      "xAft": 2,
-      "xFwd": 8,
+      "xAft": 2.0,
+      "xFwd": 8.0,
       "capacity100": 342.0,
       "maxFillPct": 100,
       "soundingTable": [
@@ -3727,7 +3727,106 @@
     "maxSegregations": 3
   },
   "strength": {
-    "readingPoints": []
+    "readingPoints": [
+      {
+        "frame": "0.15L",
+        "x": 26.4,
+        "sf": {
+          "seaMax": 5490.0,
+          "harbourMax": 6860.0
+        },
+        "bm": {
+          "seaHogMax": 90900.0,
+          "seaSagMax": 81800.0,
+          "harbourHogMax": 113600.0,
+          "harbourSagMax": 102300.0
+        }
+      },
+      {
+        "frame": "0.30L",
+        "x": 52.8,
+        "sf": {
+          "seaMax": 6460.0,
+          "harbourMax": 8070.0
+        },
+        "bm": {
+          "seaHogMax": 193200.0,
+          "seaSagMax": 173900.0,
+          "harbourHogMax": 241500.0,
+          "harbourSagMax": 217300.0
+        }
+      },
+      {
+        "frame": "0.45L",
+        "x": 79.2,
+        "sf": {
+          "seaMax": 5170.0,
+          "harbourMax": 6460.0
+        },
+        "bm": {
+          "seaHogMax": 227300.0,
+          "seaSagMax": 204600.0,
+          "harbourHogMax": 284100.0,
+          "harbourSagMax": 255700.0
+        }
+      },
+      {
+        "frame": "0.50L",
+        "x": 88.0,
+        "sf": {
+          "seaMax": 4840.0,
+          "harbourMax": 6050.0
+        },
+        "bm": {
+          "seaHogMax": 227300.0,
+          "seaSagMax": 204600.0,
+          "harbourHogMax": 284100.0,
+          "harbourSagMax": 255700.0
+        }
+      },
+      {
+        "frame": "0.65L",
+        "x": 114.4,
+        "sf": {
+          "seaMax": 5490.0,
+          "harbourMax": 6860.0
+        },
+        "bm": {
+          "seaHogMax": 215900.0,
+          "seaSagMax": 194300.0,
+          "harbourHogMax": 269900.0,
+          "harbourSagMax": 242900.0
+        }
+      },
+      {
+        "frame": "0.80L",
+        "x": 140.8,
+        "sf": {
+          "seaMax": 6460.0,
+          "harbourMax": 8070.0
+        },
+        "bm": {
+          "seaHogMax": 136400.0,
+          "seaSagMax": 122700.0,
+          "harbourHogMax": 170500.0,
+          "harbourSagMax": 153400.0
+        }
+      },
+      {
+        "frame": "0.85L",
+        "x": 149.6,
+        "sf": {
+          "seaMax": 5490.0,
+          "harbourMax": 6860.0
+        },
+        "bm": {
+          "seaHogMax": 102300.0,
+          "seaSagMax": 92000.0,
+          "harbourHogMax": 127800.0,
+          "harbourSagMax": 115100.0
+        }
+      }
+    ]
   },
   "draughtMarks": {
     "forwardX": 176.0,

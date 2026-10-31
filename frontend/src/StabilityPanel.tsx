@@ -1,11 +1,13 @@
+import BallastPreview from "./BallastPreview";
 import GzChart from "./GzChart";
 import Icon from "./Icons";
 import { CRITERION_MEANING, STAT_MEANING } from "./plainTerms";
 import type { StabilityResult } from "./types/api";
 
-function Stat({ icon, label, value, meaning }: { icon: string; label: string; value: string; meaning: string }) {
+function Stat({ icon, label, value, meaning, tone, title }: { icon: string; label: string; value: string; meaning: string;
+  tone?: "warn" | "fail"; title?: string }) {
   return (
-    <div className="stat" title={meaning}>
+    <div className={`stat ${tone ?? ""}`} title={title ?? meaning}>
       <span className="stat-icon"><Icon name={icon} size={18} /></span>
       <span><dt>{label}</dt><dd>{value}</dd><span className="stat-meaning">{meaning}</span></span>
     </div>
@@ -16,6 +18,11 @@ function Stat({ icon, label, value, meaning }: { icon: string; label: string; va
 export default function StabilityPanel({ result }: { result: StabilityResult }) {
   const failed = result.criteria.filter((c) => !c.passed);
   const lean = result.list_deg;
+  // Hull girder stress: peak shear force and bending moment, and where the bending peaks.
+  const sf = result.max_sf_pct, bm = result.max_bm_pct;
+  const hasStress = sf != null || bm != null;
+  const peak = result.strength?.length ? result.strength.reduce((a, b) => (b.bm_pct > a.bm_pct ? b : a)) : null;
+  const stressPeak = Math.max(sf ?? 0, bm ?? 0);
   return (
     <>
       <p className={`verdict-banner ${result.all_passed ? "pass" : "fail"}`}>
@@ -31,7 +38,14 @@ export default function StabilityPanel({ result }: { result: StabilityResult }) 
         <Stat icon="list" label="List" value={lean === null ? "unstable" : `${Math.abs(lean).toFixed(1)}° ${lean > 0 ? "stbd" : lean < 0 ? "port" : ""}`} meaning={STAT_MEANING.list} />
         <Stat icon="stability" label="GM (fluid)" value={`${result.gm_fluid_m.toFixed(2)} m`} meaning={STAT_MEANING.gm} />
         <Stat icon="free" label="Free surface" value={`${result.free_surface_correction_m.toFixed(2)} m`} meaning={STAT_MEANING.free} />
+        {hasStress && (
+          <Stat icon="gauge" label="Hull stress (SF / BM)"
+            value={`SF ${Math.round(sf ?? 0)}% · BM ${Math.round(bm ?? 0)}%${peak ? ` ${peak.mode === "hog" ? "hog" : "sag"}` : ""}`}
+            meaning={STAT_MEANING.stress} tone={stressPeak > 100 ? "fail" : stressPeak >= 90 ? "warn" : undefined}
+            title={`${STAT_MEANING.stress}${peak ? ` Bending peaks at ${peak.frame} (${peak.mode === "hog" ? "hogging" : "sagging"}).` : ""}`} />
+        )}
       </dl>
+      {result.ballast && <BallastPreview preview={result.ballast} />}
       <GzChart angles={result.gz_curve.anglesDeg} gz={result.gz_curve.gzM} />
       <ul className="criteria">
         {result.criteria.map((c) => (
@@ -40,15 +54,15 @@ export default function StabilityPanel({ result }: { result: StabilityResult }) 
               <span className="criterion-mark"><Icon name={c.passed ? "approve" : "cross"} size={14} label={c.passed ? "Pass" : "Fail"} /></span>
               <span className="criterion-name">{c.description}</span>
               <span className="criterion-value">
-                {c.actual.toFixed(c.unit === "deg" ? 0 : c.unit === "m" ? 2 : 3)} {c.unit}
-                <span className="muted"> / min {c.required}</span>
+                {c.actual.toFixed(c.unit === "deg" || c.unit === "%" ? 0 : c.unit === "m" ? 2 : 3)} {c.unit}
+                <span className="muted"> / {c.limit === "max" ? "max" : "min"} {c.required}</span>
               </span>
             </div>
             {CRITERION_MEANING[c.id] && <p className="criterion-meaning">{CRITERION_MEANING[c.id]}</p>}
-            {/* bar: the required value sits at 50 %, so a full bar is twice the minimum */}
+            {/* bar: a minimum sits at 50 % (a full bar is twice it); a maximum sits at 80 % (a full bar is 125 % of it) */}
             <div className="criterion-bar" aria-hidden="true">
-              <span style={{ width: `${Math.max(2, Math.min(100, (c.actual / (2 * c.required)) * 100))}%` }} />
-              <i />
+              <span style={{ width: `${Math.max(2, Math.min(100, (c.actual / ((c.limit === "max" ? 1.25 : 2) * c.required)) * 100))}%` }} />
+              <i style={c.limit === "max" ? { left: "80%" } : undefined} />
             </div>
           </li>
         ))}
@@ -64,7 +78,10 @@ export function Explanation({ text, source }: { text: string; source?: "ai" | "p
     const line = raw.trim();
     if (!line) continue;
     const head = line.match(/^(Verdict|Why|What to do|Before arrival|At berth before loading|Before sailing):\s*(.*)$/i);
-    if (head) sections.push({ title: head[1], lines: head[2] ? [head[2]] : [] });
+    if (head) {
+      const rest = head[2].replace(/^[\s.:;,-]+$/, "");  // a stray full stop after a heading is not a line
+      sections.push({ title: head[1], lines: rest ? [rest] : [] });
+    }
     else if (sections.length) sections[sections.length - 1].lines.push(line.replace(/^[-•*]\s*/, ""));
     else sections.push({ title: "", lines: [line] });
   }

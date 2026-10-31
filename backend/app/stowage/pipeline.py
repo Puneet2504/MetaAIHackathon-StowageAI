@@ -14,9 +14,9 @@ from datetime import datetime, timezone
 from .. import config, memory, vessels
 from ..llm import client, plain, prompts, tasks
 from ..llm.digest import plan_digest
-from ..engine.stability import TankLoad
+from ..engine.stability import StabilityError, TankLoad, calculate
 from ..schemas import ConstraintsIn
-from . import cleaning
+from . import cleaning, voyage_check
 from .grades import GRADES, match_grade
 from .solver import Constraints, solve
 
@@ -77,7 +77,8 @@ def plan_voyage(vessel: dict, order_text: str | None, parcels, instructions: str
     if instructions and instructions.strip():
         cargo = [t["id"] for t in vessel["tanks"] if t["type"] == "cargo"]
         out = tasks.read_instruction(instructions.strip(), cargo, sorted({p.grade for p in parcels}),
-                                     constraints.model_dump(), memory_lines=lines("grade_alias", "note"))
+                                     constraints.model_dump(), memory_lines=lines("grade_alias", "note"),
+                                     aliases=memory.aliases(user) if user else None)
         ids = {t["id"] for t in vessel["tanks"]}
         constraints = ConstraintsIn(empty_tanks=[t for t in out.constraints.empty_tanks if t in ids],
                                     fixed_grades={t: g for t, g in out.constraints.fixed_grades.items() if t in ids},
@@ -170,7 +171,7 @@ def _plan_stages(vessel: dict, parcels, merged: ConstraintsIn, aliases, last: di
     time at the port) is kept. Even fill then spreads over the tanks used rather than every tank.
     """
     load_ports = list(dict.fromkeys(p.load_port for p in parcels if p.load_port))
-    dis_ports = list(dict.fromkeys(p.discharge_port for p in parcels if p.discharge_port))
+    dis_ports = voyage_check.discharge_rotation(parcels)  # a reload port comes before the ports its cargo goes to
     reload = [d for d in dis_ports if any(_same_port(d, lp) for lp in load_ports)]
     later = [i for i, p in enumerate(parcels) if any(_same_port(p.load_port, d) for d in reload)]
     first = [i for i in range(len(parcels)) if i not in later]
@@ -180,12 +181,12 @@ def _plan_stages(vessel: dict, parcels, merged: ConstraintsIn, aliases, last: di
     _caps.clear()
     _caps.update({t["id"]: t["capacity100"] for t in vessel["tanks"]})
 
-    def run(idx, on_board, prev, lookahead=False, partial=False):
+    def run(idx, on_board, prev, lookahead=False, partial=False, alternatives=False):
         sub = [parcels[i] for i in idx]
         cons = _constraints_for(merged, sub)
         cons.even_fill_partial = lookahead or partial
         plan = solve(vessel, sub, cons, aliases=aliases, on_board=on_board, prev_grades=prev,
-                     alternatives=LOOKAHEAD_OPTIONS if lookahead else 0)
+                     alternatives=LOOKAHEAD_OPTIONS if lookahead or alternatives else 0)
         for p in [plan] + plan.get("alternatives", []):
             for a in p["allocation"]:
                 a["parcel"] = idx[a["parcel"]]  # back to the order's parcel numbers
@@ -242,29 +243,227 @@ def _plan_stages(vessel: dict, parcels, merged: ConstraintsIn, aliases, last: di
                             "saving": None}
         return plan
 
+    def checked(plan: dict) -> dict:
+        """The plan with its voyage check: pipelines and the ship's condition after every port."""
+        plan["voyage_check"] = voyage_check.check(vessel, parcels, voyage_check.cargo_from_plan(plan))
+        return plan
+
+    def with_ballast(plan: dict) -> dict:
+        """The chosen plan's voyage check again, with a ballast preview for every port whose trim is off."""
+        plan["voyage_check"] = voyage_check.check(vessel, parcels, voyage_check.cargo_from_plan(plan), ballast=True)
+        return plan
+
+    def blocked(plan: dict) -> int:
+        return sum(1 for i in plan["voyage_check"]["issues"] if i["severity"] == "block")
+
     def rank(plan: dict) -> tuple:
         results = [plan.get("result")] + [s.get("result") for s in plan["stages"]]
         left = sum(a["unallocated_m3"] for p in [plan] + plan["stages"] for a in p["allocation"])
         # Large trim (the engine's warning, over 1.5% of the length) is worse than some cleaning.
         steep = sum(1 for r in results if r and any(w.startswith("Large trim") for w in r["warnings"]))
         total = plan["cleaning"]["total"]
-        return (not all(r and r["all_passed"] for r in results), round(left), steep, total["cost_usd"], total["hours"],
-                _unevenness(plan) if merged.fill == "even" else 0)
+        # A plan that traps cargo or is unsafe after some port goes behind every plan that passes the voyage check.
+        return (blocked(plan), not all(r and r["all_passed"] for r in results), round(left), steep, total["cost_usd"],
+                total["hours"], _unevenness(plan) if merged.fill == "even" else 0)
 
     if not reload:
-        return simulate(run(first, [], last))
+        # The solver's best, unless an alternative passes the voyage check, or has fewer warnings after later ports
+        # (the departure condition is already the solver's own choice; min keeps its order on ties).
+        top = run(first, [], last, alternatives=True)
+        options = [checked(simulate(o)) for o in [top] + top.pop("alternatives", [])]
+
+        def later_warnings(o: dict) -> int:
+            start = o["voyage_check"]["ports"][0]["port"] if o["voyage_check"]["ports"] else None
+            return sum(1 for i in o["voyage_check"]["issues"] if i["severity"] == "warn" and i["port"] != start)
+
+        return with_ballast(min(options, key=lambda o: (blocked(o), round(sum(a["unallocated_m3"] for a in o["allocation"])),
+                                                        later_warnings(o))))
 
     # The first port planned on its own (as before), then the same port planned with the later cargo in mind.
-    baseline = simulate(run(first, [], last))
+    baseline = checked(simulate(run(first, [], last)))
     ahead = run(first, [], last, lookahead=True)
-    options = [simulate(p) for p in [ahead] + ahead.pop("alternatives", [])]
+    options = [checked(simulate(p)) for p in [ahead] + ahead.pop("alternatives", [])]
     best = min([*options, baseline], key=rank)  # min keeps the earliest of equals: the solver's own order
     b, c = baseline["cleaning"]["total"], best["cleaning"]["total"]
     if rank(best)[:2] == rank(baseline)[:2] and (b["cost_usd"] > c["cost_usd"] or b["hours"] > c["hours"]):
         best["cleaning"]["saving"] = {"hours": round(b["hours"] - c["hours"], 1), "cost_usd": b["cost_usd"] - c["cost_usd"],
                                       "tanks": baseline["cleaning"]["tanks_to_clean"] - best["cleaning"]["tanks_to_clean"],
                                       "port": reload[0], "compared_to": f"planning {first_port or 'the first port'} on its own"}
-    return best
+    return with_ballast(best)
+
+# ---------- hand-edited conditions ----------
+
+def check_condition(vessel: dict, parcels, loads: list[dict], aliases=None) -> dict:
+    """Check a hand-edited tank condition against the order's ports, and build the plan it would approve as.
+
+    Returns the voyage check (with a swap suggestion when something is blocked), the per-parcel allocation
+    and the stability result on departure. Orders that reload at a later port are planned by the solver only.
+    """
+    from .grades import grade_for
+    from .quantities import convert
+    from .solver import service_loads
+
+    load_ports = {str(p.load_port).lower() for p in parcels if p.load_port}
+    if any(p.discharge_port and p.discharge_port.lower() in load_ports for p in parcels):
+        report = {"ok": False, "ports": [], "suggestion": None, "issues": [{
+            "code": "RELOAD_NOT_SUPPORTED", "severity": "block", "port": "", "lines": [], "tanks": [],
+            "message": "This order loads again at a port where cargo is discharged; hand edits can't be checked for it. "
+                       "Replan with the AI planner instead."}]}
+        return {"check": report, "allocation": [], "result": None, "plan": None}
+
+    cargo, notes = voyage_check.cargo_from_loads(vessel, parcels, loads, aliases)
+    report = voyage_check.check(vessel, parcels, cargo, ballast=True)
+    report["issues"] = notes + report["issues"]
+    pipes = voyage_check.Pipes(vessel)
+    allocation = []
+    for i, p in enumerate(parcels):
+        mine = [c for c in cargo if c.parcel == i]
+        lib, _ = grade_for(p.grade, None, aliases)
+        conv = convert(p, lib.id, lib.density) or {}
+        vol = sum(c.volume_m3 for c in mine)
+        density = sum(c.volume_m3 * c.density for c in mine) / vol if vol else lib.density
+        requested = conv.get("volume_m3", vol)
+        allocation.append({"parcel": i, "grade": p.grade, "grade_id": lib.id, "density_t_m3": round(density, 4),
+                           "requested_m3": round(requested, 1), "allocated_m3": round(vol, 1),
+                           "unallocated_m3": round(max(0.0, requested - vol), 1), "tonnes": round(vol * density, 1),
+                           "conversion": conv or None, "tanks": [c.tank for c in mine],
+                           "lines": sorted({pipes.line_of[c.tank] for c in mine if c.tank in pipes.line_of})})
+    plan_loads = [{"tank_id": c.tank, "volume_m3": c.volume_m3, "density_t_m3": c.density, "grade": c.grade_id}
+                  for c in cargo] + [vars(s) for s in service_loads(vessel)]
+    try:
+        result = calculate(vessel, [TankLoad(l["tank_id"], l["volume_m3"], l["density_t_m3"], l["grade"])
+                                    for l in plan_loads]).to_dict()
+    except StabilityError as e:
+        result = None
+        report["issues"].append({"code": "PORT_CONDITION", "severity": "block", "port": "", "lines": [], "tanks": [],
+                                 "message": str(e)})
+        report["ok"] = False
+    short = any(a["unallocated_m3"] > 0.5 for a in allocation)
+    passed = bool(result and result["all_passed"])
+    plan = {"status": "fails_criteria" if not passed else "partial" if short else "planned",
+            "message": "Adjusted by hand.", "manual": True, "loads": plan_loads, "allocation": allocation,
+            "result": result, "stages": [], "candidates_checked": 0, "candidates_total": 0,
+            "warnings": [i["message"] for i in report["issues"] if i["severity"] == "warn"], "voyage_check": report}
+    return {"check": report, "allocation": allocation, "result": result, "plan": plan}
+
+
+# ---------- adding cargo to an approved voyage ----------
+
+def rebuild_conditions(vessel: dict, parcels, plan: dict) -> None:
+    """Recompute the tank loads and stability of every condition (departure and after each reload port) from the
+    voyage's cargo, using the same port timeline as the voyage check, so the two always agree."""
+    from .solver import service_loads
+
+    service = [vars(s) for s in service_loads(vessel)]
+    steps = voyage_check.port_timeline(parcels, voyage_check.cargo_from_plan(plan))
+
+    def condition(aboard) -> tuple[list[dict], dict | None]:
+        loads = [{"tank_id": c.tank, "volume_m3": c.volume_m3, "density_t_m3": c.density, "grade": c.grade_id}
+                 for c in aboard] + service
+        try:
+            return loads, calculate(vessel, [TankLoad(l["tank_id"], l["volume_m3"], l["density_t_m3"], l["grade"])
+                                             for l in loads]).to_dict()
+        except StabilityError:
+            return loads, None
+
+    plan["loads"], plan["result"] = condition(steps[0]["aboard"])
+    for st in plan.get("stages") or []:
+        step = next(s for s in steps if s["stage"] and _same_port(s["port"], st["port"]))
+        st["loads"], st["result"] = condition(step["aboard"])
+        st["discharged"] = sorted({c.grade for c in step["leaving"]})
+        passed = bool(st["result"] and st["result"]["all_passed"])
+        st["status"], st["message"] = ("planned", "Plan passes all stability criteria.") if passed else \
+            ("fails_criteria", "The condition after this port fails its stability checks.")
+
+
+def amend_voyage(user: str, vessel: dict, record: dict, suggestion: dict, order_line: str | None) -> dict:
+    """Add a verified open-space suggestion to the voyage itself: existing cargo stays where it is, the new
+    cargo goes into the suggested tanks at its port, and every condition, check and summary is redone."""
+    from . import open_space
+    from .grades import grade_for
+
+    facts = open_space.voyage_facts(vessel, record)
+    verdict = open_space.verify(vessel, record, facts, suggestion)
+    if not verdict["verified"]:
+        raise ValueError(verdict["why"])
+
+    plan = record["plan"]
+    parcels = list(record.get("parcels") or [])
+    lib, _ = grade_for(suggestion["grade"], None)
+    density = facts["grades"].get(suggestion["grade"]) or lib.density
+    port, dis = suggestion["port"], suggestion["discharge_port"]
+    parcels.append({"grade": suggestion["grade"], "quantity_t": None, "quantity_m3": suggestion["quantity_m3"],
+                    "density_t_m3": density, "load_port": port, "discharge_port": dis})
+    tanks = {t["id"]: t for t in vessel["tanks"]}
+    total = sum(tanks[t]["capacity100"] for t in suggestion["tanks"])
+    new_loads = [{"tank_id": t, "volume_m3": round(suggestion["quantity_m3"] * tanks[t]["capacity100"] / total, 1),
+                  "density_t_m3": density, "grade": lib.id} for t in suggestion["tanks"]]
+    pipes = voyage_check.Pipes(vessel)
+    alloc = {"parcel": len(parcels) - 1, "grade": suggestion["grade"], "grade_id": lib.id, "density_t_m3": density,
+             "requested_m3": suggestion["quantity_m3"], "allocated_m3": suggestion["quantity_m3"], "unallocated_m3": 0.0,
+             "tonnes": round(suggestion["quantity_m3"] * density, 1), "conversion": None, "tanks": suggestion["tanks"],
+             "lines": sorted({pipes.line_of[t] for t in suggestion["tanks"] if t in pipes.line_of})}
+
+    first_port = facts["ports"][0]["port"]
+    if _same_port(port, first_port):  # loads with the rest of the cargo at the first port
+        plan["allocation"].append(alloc)
+        plan["loads"] = plan["loads"] + new_loads
+    else:  # loads at a later port: that port's stage, created in calling order if it had none
+        stages = plan.setdefault("stages", [])
+        stage = next((s for s in stages if _same_port(s["port"], port)), None)
+        if stage is None:
+            stage = {"port": port, "discharged": [], "status": "planned", "message": "", "allocation": [], "loads": [],
+                     "result": None, "warnings": []}
+            stages.append(stage)
+            order = [d for d in voyage_check.discharge_rotation(parcels)]
+            stages.sort(key=lambda s: next(i for i, d in enumerate(order) if _same_port(d, s["port"])))
+        stage["allocation"].append(alloc)
+        stage["loads"] = stage["loads"] + new_loads
+
+    rebuild_conditions(vessel, parcels, plan)
+    plan["voyage_check"] = voyage_check.check(vessel, parcels, voyage_check.cargo_from_plan(plan), ballast=True)
+
+    # Cleaning for the new tanks (their last cargo on this voyage); the existing rows stay as they were.
+    port_facts = next(p for p in facts["ports"] if _same_port(p["port"], port))
+    last = {t: e["last"] for e in port_facts["empty"] for t in open_space._expand(e["tanks"])}
+    rows = []
+    for t in suggestion["tanks"]:
+        prev = grade_for(last[t], None)[0].id if last.get(t) else None
+        if prev and prev != lib.id:
+            rows.append({"tank": t, "prev": prev, "prev_name": last[t], "next": lib.id, "next_name": suggestion["grade"],
+                         "source": f"discharged at {port}" if not _same_port(port, first_port) else "last voyage",
+                         **cleaning.requirement(prev, lib.id)})
+    report = plan.setdefault("cleaning", {"ports": [], "last_voyage": None, "tanks_to_clean": 0, "total": {"hours": 0, "cost_usd": 0}})
+    if rows:
+        entry = next((p for p in report["ports"] if _same_port(p["port"], port)), None)
+        if entry is None:
+            entry = {"port": port, "when": "before loading", "source": rows[0]["source"], "changes": [], "checks": []}
+            report["ports"].append(entry)
+        entry["changes"] += rows
+        entry["checks"] = cleaning.port_checks(entry["changes"])
+        entry["estimate"] = cleaning.estimate(entry["changes"])
+        report["tanks_to_clean"] = sum(1 for p in report["ports"] for c in p["changes"] if c["level"] > 0)
+        report["total"] = {"hours": round(sum(p.get("estimate", {}).get("hours", 0) for p in report["ports"]), 1),
+                           "cost_usd": sum(p.get("estimate", {}).get("cost_usd", 0) for p in report["ports"])}
+
+    line = order_line or f"Load {port}: {suggestion['quantity_t']:,.0f} mt {suggestion['grade']} for {dis}."
+    plan.setdefault("amendments", []).append({
+        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "by": user, "line": line, "port": port,
+        "tanks": suggestion["tanks"], "grade": suggestion["grade"], "quantity_t": suggestion["quantity_t"]})
+    record = {**record, "parcels": parcels, "plan": plan,
+              "order_text": f"{(record.get('order_text') or '').strip()} {line}".strip(),
+              "explanation": plain.explain_plan(plan_digest(plan))}
+    record["voyage"] = voyage_summary(record)
+    stored = {k: v for k, v in record.items() if k != "vessel"}
+    vessels.write_json(_plan_dir(user) / f"{record['id']}.json", stored)
+    return record
+
+
+def blocking_issue(vessel: dict, parcels, plan: dict) -> str | None:
+    """The first blocking voyage-check issue of a plan about to be approved, or None (checked again on the server)."""
+    report = voyage_check.check(vessel, parcels, voyage_check.cargo_from_plan(plan), suggest=False)
+    return next((i["message"] for i in report["issues"] if i["severity"] == "block"), None)
+
 
 def last_cargo(user: str, vessel_id: str) -> tuple[dict[str, str], dict | None]:
     """Each cargo tank's last grade after the ship's latest approved voyage, and which voyage that was."""
@@ -290,14 +489,14 @@ def voyage_summary(record: dict) -> dict:
     parcels = record.get("parcels") or []
     plan = record.get("plan") or {}
     load_ports = list(dict.fromkeys(p["load_port"] for p in parcels if p.get("load_port")))
-    dis_ports = list(dict.fromkeys(p["discharge_port"] for p in parcels if p.get("discharge_port")))
-    grades = [{"grade": a["grade"], "grade_id": a["grade_id"],
-               "tonnes": round(a["tonnes"] if a.get("tonnes") is not None else a["allocated_m3"] * a["density_t_m3"])}
-              for a in plan.get("allocation", [])]
-    for st in plan.get("stages") or []:
-        grades += [{"grade": a["grade"], "grade_id": a["grade_id"],
-                    "tonnes": round(a["tonnes"] if a.get("tonnes") is not None else a["allocated_m3"] * a["density_t_m3"])}
-                   for a in st.get("allocation", [])]
+    dis_ports = voyage_check.discharge_rotation(parcels)
+    # One entry per grade, even when it is loaded as several parcels or at a later port.
+    by_grade: dict[str, dict] = {}
+    for a in [*plan.get("allocation", []), *(a for st in plan.get("stages") or [] for a in st.get("allocation", []))]:
+        t = a["tonnes"] if a.get("tonnes") is not None else a["allocated_m3"] * a["density_t_m3"]
+        g = by_grade.setdefault(a["grade_id"], {"grade": a["grade"], "grade_id": a["grade_id"], "tonnes": 0.0})
+        g["tonnes"] += t
+    grades = [{**g, "tonnes": round(g["tonnes"])} for g in by_grade.values()]
     r = plan.get("result") or {}
     passed = bool(r.get("all_passed")) and all((st.get("result") or {}).get("all_passed") for st in plan.get("stages") or [])
     return {"load_ports": load_ports, "discharge_ports": dis_ports, "grades": grades,
@@ -331,8 +530,14 @@ def _records(user: str) -> list[dict]:
             v = vessels.get(r.get("vessel_id", ""), user) or {}
             r["vessel_name"] = (v.get("particulars") or {}).get("name", r.get("vessel_id"))
             r["size_class"] = (v.get("particulars") or {}).get("sizeClass")
-        out.append(r)
-    return sorted(out, key=lambda r: r["approved_at"], reverse=True)
+        out.append((r, path.stat().st_mtime_ns))
+    # Newest first; two approvals in the same second are told apart by when their file was written.
+    return [r for r, _ in sorted(out, key=lambda x: (x[0]["approved_at"], x[1]), reverse=True)]
+
+
+def current_voyage(user: str, vessel_id: str) -> dict | None:
+    """A ship's current voyage: its latest approved one."""
+    return next((r for r in _records(user) if r.get("vessel_id") == vessel_id), None)
 
 
 def list_voyages(user: str, vessel_id: str | None = None) -> list[dict]:

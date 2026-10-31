@@ -12,6 +12,18 @@ export interface CriterionResult {
   actual: number;
   unit: string;
   passed: boolean;
+  limit?: "min" | "max";  // "max": the actual value must not exceed the required one (hull strength)
+}
+
+// Still-water shear force and bending moment at one reading point along the hull.
+export interface StrengthPoint {
+  frame: string;
+  x: number;
+  sf_t: number;
+  bm_tm: number;          // > 0 hogging, < 0 sagging
+  mode: "hog" | "sag";
+  sf_pct: number;         // % of the sea limit
+  bm_pct: number;
 }
 
 export interface StabilityResult {
@@ -32,6 +44,10 @@ export interface StabilityResult {
   criteria: CriterionResult[];
   warnings: string[];
   all_passed: boolean;
+  max_sf_pct?: number | null;   // peak shear force, % of the safe sea limit
+  max_bm_pct?: number | null;   // peak bending moment, % of the safe sea limit
+  strength?: StrengthPoint[] | null;
+  ballast?: BallastPreview | null;  // manual checks: how to bring the trim back to normal
 }
 
 export interface Parcel {
@@ -190,6 +206,85 @@ export interface CleaningReport {
   saving?: (CleaningEstimate & { tanks: number; port: string; compared_to: string }) | null;
 }
 
+// Open space on a ship's current voyage (backend app/stowage/open_space.py and the AI task open_space).
+export interface SpacePort {
+  port: string;
+  later_ports: string[];
+  on_board: string[];
+  grades_on_board: string[];
+  empty: { tanks: string; line: string | null; m3: number; last: string | null }[];
+  free_lines: string[];
+}
+
+export interface OpenSpaceShip {
+  vessel_id: string;
+  vessel_name: string | null;
+  size_class: string | null;
+  voyage: null | {
+    id: string;
+    approved_at: string;
+    order_text: string | null;
+    route: { load_ports: string[]; discharge_ports: string[] };
+    facts: { ship: string; max_grades: number; lines: Record<string, string>; ports: SpacePort[]; grades: Record<string, number> };
+  };
+}
+
+export interface SpaceOffer {
+  port: string;
+  discharge_port: string;
+  grade: string;
+  tanks: string[];
+  quantity_m3: number;
+  quantity_t: number;
+  cleaning: string;
+  reason: string;
+  checks: string[];          // what the AI checked
+  order_line: string;        // e.g. "Load Le Havre: 9,800 mt Jet A-1 for Bilbao."
+  check: { verified: boolean; label: string; why: string };  // safety label from the voyage check
+}
+
+export interface SpaceAnswer extends OpenSpaceShip {
+  ai: { summary: string; suggestions: SpaceOffer[] } | null;
+  message: string | null;
+}
+
+// The voyage check (backend app/stowage/voyage_check.py): pipelines and the ship after every port.
+export interface VoyageIssue {
+  code: string;            // LINE_SHARED, PUMP_SHARED, CROSSOVER, DISCHARGE_BLOCKED, PORT_CONDITION, GRADE_AMBIGUOUS, ...
+  severity: "block" | "warn" | "note";
+  port: string;
+  message: string;
+  tanks: string[];
+  lines: string[];
+}
+
+export interface PortCondition {
+  port: string;
+  kind: "load" | "discharge" | "reload";
+  aboard: string[];
+  passed: boolean | null;  // null: the ship leaves empty (in ballast)
+  gm_m?: number;
+  trim_m?: number;
+  max_sf_pct?: number | null;
+  max_bm_pct?: number | null;
+  failed: string[];
+  ballast?: BallastPreview | null;
+}
+
+export interface SwapSuggestion {
+  moves: { kind: "move" | "swap"; grade: string; from: string; to: string }[];
+  resolves: string[];
+  loads: TankLoad[];       // the condition after the swaps
+  after: { ok: boolean; ports: { port: string; passed: boolean | null; max_sf_pct?: number | null; max_bm_pct?: number | null; trim_m?: number }[] };
+}
+
+export interface VoyageCheckReport {
+  ok: boolean;
+  ports: PortCondition[];
+  issues: VoyageIssue[];
+  suggestion: SwapSuggestion | null;
+}
+
 // A later port where emptied tanks are reloaded: the cargo loaded there and the condition on leaving.
 export interface PlanStage {
   port: string;
@@ -200,6 +295,32 @@ export interface PlanStage {
   loads: TankLoad[];
   result: StabilityResult | null;
   warnings: string[];
+}
+
+// Ballast that brings the trim back to slightly by the stern (backend app/stowage/ballast.py). A preview only.
+export interface BallastPreview {
+  tanks: { tank: string; m3: number; t: number; pct: number }[];
+  total_t: number;
+  trim_before: number;
+  trim_after: number;
+  draught_fwd_m?: number;
+  draught_aft_m?: number;
+  gm_m?: number;
+  max_stress_pct?: number | null;
+  passed?: boolean;
+  reached: boolean;
+  note: string | null;
+}
+
+// Cargo added to an approved voyage from Open space.
+export interface Amendment {
+  at: string;
+  by: string;
+  line: string;
+  port: string;
+  tanks: string[];
+  grade: string;
+  quantity_t: number;
 }
 
 export interface StowagePlan {
@@ -213,6 +334,9 @@ export interface StowagePlan {
   warnings: string[];
   stages?: PlanStage[];
   cleaning?: CleaningReport;
+  voyage_check?: VoyageCheckReport;
+  manual?: boolean;
+  amendments?: Amendment[];        // a hand-edited condition approved after passing the voyage check
 }
 
 export type MemoryKind = "constraint_empty" | "constraint_fixed" | "max_trim" | "fill_mode" | "grade_alias" | "note" | "explain_style";

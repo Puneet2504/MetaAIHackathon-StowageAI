@@ -20,7 +20,9 @@ MODEL_TIMEOUT_S = float(os.getenv("MODEL_TIMEOUT_S", "60"))
 MODEL_JSON_MODE = os.getenv("MODEL_JSON_MODE", "false").lower() in ("1", "true", "yes")
 # Output caps per task, in tokens. Reasoning models count their hidden reasoning here too,
 # so these are safety limits, not targets.
-MAX_TOKENS_EXPLAIN = int(os.getenv("MAX_TOKENS_EXPLAIN", "900"))
+MAX_TOKENS_EXPLAIN = int(os.getenv("MAX_TOKENS_EXPLAIN", "2000"))  # room for hidden reasoning plus the reply
+MAX_TOKENS_OPEN_SPACE = int(os.getenv("MAX_TOKENS_OPEN_SPACE", "8000"))  # the AI checks tanks, lines and cleaning itself
+REASONING_EFFORT_OPEN_SPACE = os.getenv("REASONING_EFFORT_OPEN_SPACE", "low")
 MAX_TOKENS_CHECKLIST = int(os.getenv("MAX_TOKENS_CHECKLIST", "1800"))  # cleaning checklists cover several ports
 MAX_TOKENS_JSON = int(os.getenv("MAX_TOKENS_JSON", "1200"))
 MAX_TOKENS_DRAWING = int(os.getenv("MAX_TOKENS_DRAWING", "8000"))  # big GA drawings: 30+ tanks

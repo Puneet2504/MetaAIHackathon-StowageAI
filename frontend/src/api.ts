@@ -1,6 +1,6 @@
 import type { VesselModel } from "./types/vessel-model";
-import type { ApprovedPlanSummary, CleaningReport, DraftLayout, MemoryItem, Parcel, PlanResponse, ReadDrawingOut, StabilityResult,
-  StowageConstraints, StowagePlan, TankLoad, UsageSummary, VesselLayout, VesselSummary, VoyageDetail,
+import type { Allocation, ApprovedPlanSummary, CleaningReport, DraftLayout, OpenSpaceShip, SpaceAnswer, SpaceOffer, MemoryItem, Parcel, PlanResponse, ReadDrawingOut, StabilityResult,
+  StowageConstraints, StowagePlan, TankLoad, UsageSummary, VesselLayout, VesselSummary, VoyageCheckReport, VoyageDetail,
   VoyageListItem } from "./types/api";
 
 export const SESSION_KEY = "tanker-planner-session";
@@ -81,6 +81,15 @@ export const api = {
   approvePlan: (body: { vessel_id: string; order_text: string; parcels: Parcel[];
     constraints: StowageConstraints; plan: StowagePlan; explanation?: string | null }) =>
     call<{ id: string }>("/stowage/plans", body),
+  checkVoyage: (body: { vessel_id: string; parcels: Parcel[]; loads: TankLoad[] }) =>
+    call<{ check: VoyageCheckReport; allocation: Allocation[]; result: StabilityResult | null }>("/stowage/check", body),
+  approveManual: (body: { vessel_id: string; order_text: string; parcels: Parcel[]; loads: TankLoad[] }) =>
+    call<{ id: string }>("/stowage/plans/manual", body),
+  openSpace: () => call<OpenSpaceShip[]>("/open-space"),
+  openSpaceFor: (vesselId: string) => call<OpenSpaceShip>(`/open-space/${vesselId}`),
+  openSpaceSuggest: (vesselId: string) => call<SpaceAnswer>(`/open-space/${vesselId}/suggest`, {}),
+  addToVoyage: (voyageId: string, suggestion: SpaceOffer) =>
+    call<VoyageDetail>(`/voyages/${voyageId}/add`, { suggestion, order_line: suggestion.order_line }),
   voyages: () => call<VoyageListItem[]>("/voyages"),
   voyage: (id: string) => call<VoyageDetail>(`/voyages/${id}`),
   deleteVoyage: (id: string) => call<void>(`/voyages/${id}`, undefined, "DELETE"),

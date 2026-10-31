@@ -12,6 +12,7 @@ FAIL_WORDS = {
     "AREA_30_40": "it loses too much of its fight-back between 30 and 40 degrees of roll",
     "GZ_AT_30": "at a 30 degree roll it would not push back hard enough",
     "ANGLE_GZ_MAX": "it reaches its strongest push-back too early in a roll",
+    "STRENGTH_LIMIT": "the cargo would bend or shear the hull beyond its safe limit at sea",
 }
 
 
@@ -35,8 +36,12 @@ def plain_stability(d: dict) -> list[str]:
         why.append(f"It leans {_num(abs(lean), '°', 1)} to one side (list), and sits {_num(d['trim_m'], ' m')} "
                    f"lower at the {d['trim_by']} (trim).")
     for f in d["fails"][:2]:
+        bound = "maximum" if f.get("limit") == "max" else "minimum"
         why.append(f"Problem: {FAIL_WORDS.get(f['id'], f['name'].lower())} "
-                   f"({_num(f['actual'], ' ' + f['unit'], 2)} against a minimum of {f['min']} {f['unit']}).")
+                   f"({_num(f['actual'], ' ' + f['unit'], 2)} against a {bound} of {f['min']} {f['unit']}).")
+    if d.get("bm_pct") is not None and d["bm_pct"] >= 85 and not any(f["id"] == "STRENGTH_LIMIT" for f in d["fails"]):
+        why.append(f"The hull is close to its safe bending limit ({d['bm_mode']}): the cargo is bunched "
+                   f"{'in the middle' if d['bm_mode'] == 'sagging' else 'towards the ends'} of the ship.")
     return why[:3]
 
 
@@ -49,6 +54,9 @@ def _todo(d: dict) -> list[str]:
         todo.append("Fill tanks fully or leave them empty: half-full tanks let liquid slosh and make the ship less steady.")
     if d["list_deg"] is None or (d["list_deg"] and abs(d["list_deg"]) >= 0.5):
         todo.append("Balance the cargo between the left (port) and right (starboard) tanks.")
+    if "STRENGTH_LIMIT" in ids:
+        todo.append("Spread the cargo more evenly along the ship: heavy cargo bunched in the middle or at the ends "
+                    "bends the hull.")
     if any("overloaded" in w for w in d["warnings"]):
         todo.append("Load less cargo: the ship would be deeper than its safe limit.")
     if any("trim" in w.lower() for w in d["warnings"]):
@@ -108,4 +116,9 @@ def explain_plan(p: dict) -> str:
         todo = todo[:1] + [assumed_note(p)]
     if p.get("cleaning_saving"):
         why = why[:2] + [p["cleaning_saving"] + "."]
+    blocking = [l for l in p.get("voyage_check", []) if l.endswith("(blocking)")]
+    if blocking:  # cargo trapped, lines shared or unsafe after a port: not safe whatever the departure check says
+        verdict = "Not safe as planned: the voyage check found a problem at a later port or in the pipelines."
+        why = [blocking[0].removesuffix(" (blocking)")] + why[:2]
+        todo = ["Apply the suggested tank swaps, or replan, before approving."] + todo[:1]
     return f"Verdict: {verdict}\nWhy:\n{_bullets(why[:3])}\nWhat to do:\n{_bullets(todo)}"

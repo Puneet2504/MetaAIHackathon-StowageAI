@@ -84,5 +84,34 @@ class LayoutValidationTests(unittest.TestCase):
                                    LayoutTank(id="A", type="cargo", side="S", xAft=10, xFwd=20)])
 
 
+class StrengthLimitTests(unittest.TestCase):
+    def test_built_ship_has_seven_reading_points(self):
+        ship = build_demo()
+        points = ship["strength"]["readingPoints"]
+        self.assertEqual([p["frame"] for p in points], ["0.15L", "0.30L", "0.45L", "0.50L", "0.65L", "0.80L", "0.85L"])
+        mid = points[3]
+        self.assertEqual(mid["bm"]["seaSagMax"], round(0.9 * mid["bm"]["seaHogMax"], -2))
+        self.assertGreater(mid["bm"]["harbourHogMax"], mid["bm"]["seaHogMax"])
+        self.assertGreater(mid["bm"]["seaHogMax"], points[0]["bm"]["seaHogMax"])  # largest amidships
+
+    def test_limits_grow_with_displacement(self):
+        from app.vessel_builder import strength_limits
+        small, big = strength_limits(150, 30000), strength_limits(150, 60000)
+        for a, b in zip(small["readingPoints"], big["readingPoints"]):
+            self.assertGreater(b["sf"]["seaMax"], a["sf"]["seaMax"])
+            self.assertGreater(b["bm"]["seaHogMax"], a["bm"]["seaHogMax"])
+
+    def test_ships_saved_without_limits_get_them_on_read(self):
+        import tempfile
+        from unittest import mock
+        from app import config, vessels
+        ship = build_demo()
+        ship["id"], ship["strength"] = "old-ship", {"readingPoints": []}
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(config, "USER_DIR", Path(tmp)):
+            vessels.save("ann", ship)
+            got = vessels.get("old-ship", "ann")
+        self.assertEqual(len(got["strength"]["readingPoints"]), 7)
+
+
 if __name__ == "__main__":
     unittest.main()

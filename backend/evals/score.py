@@ -106,4 +106,40 @@ def score_instruction(expected: dict, actual: dict) -> list[str]:
     return problems + _note_problems(expected, actual)
 
 
-SCORERS = {"orders": score_order, "drawings": score_drawing, "instructions": score_instruction}
+def score_open_space(expected: dict, actual: dict, context: dict | None = None) -> list[str]:
+    """Every suggestion must keep to the facts (empty tanks, 98% room, one grade per line, a later port),
+    and the best one must be the expected 'perfect fit' grade."""
+    problems = []
+    sugg = actual.get("suggestions") or []
+    if not sugg:
+        return ["no suggestions"]
+    if not _same_text(sugg[0].get("grade"), expected["first_grade"]) and \
+            _grade_key(sugg[0].get("grade")) != _grade_key(expected["first_grade"]):
+        problems.append(f"best grade: expected {expected['first_grade']}, got {sugg[0].get('grade')}")
+    for s in sugg if context else []:
+        port = next((p for p in context["ports"] if _same_text(p["port"], s.get("port"))), None)
+        if port is None or not any(_same_text(d, s.get("discharge_port")) for d in port["later_ports"]):
+            problems.append(f"{s.get('grade')}: port {s.get('port')} -> {s.get('discharge_port')} not in the voyage")
+            continue
+        empty = {}
+        for e in port["empty"]:
+            for part in e["tanks"].split(", "):
+                for t in ([part[:-4] + "P", part[:-4] + "S"] if part.endswith(" P/S") else [part]):
+                    empty[t] = e
+        if bad := [t for t in s.get("tanks", []) if t not in empty]:
+            problems.append(f"{s.get('grade')}: tanks not empty at {port['port']}: {bad}")
+            continue
+        room = sum({id(empty[t]): empty[t]["m3"] for t in s["tanks"]}.values())
+        if s.get("quantity_m3", 0) > room + 1:
+            problems.append(f"{s.get('grade')}: {s.get('quantity_m3')} m3 is more than the {room} m3 of room")
+        busy = {line.split("(line ")[-1].rstrip(")"): line.split(":")[0] for line in port["on_board"]}
+        for t in s["tanks"]:
+            line = empty[t]["line"]
+            if line in busy and _grade_key(busy[line]) != _grade_key(s.get("grade")):
+                problems.append(f"{s.get('grade')}: line {line} carries {busy[line]}")
+                break
+    return problems
+
+
+SCORERS = {"orders": score_order, "drawings": score_drawing, "instructions": score_instruction,
+           "openspace": score_open_space}

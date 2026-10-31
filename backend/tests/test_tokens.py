@@ -5,11 +5,16 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from fastapi.testclient import TestClient
+
 from app import config
+from app.engine.stability import TankLoad, calculate
+from app.main import app
 from app.llm import cache, client, prompts, tasks, usage
 from app.llm.digest import for_model, plan_digest, stability_digest
 from app.stowage.solver import solve
 from app.schemas import Parcel
+from auth_helper import SignedIn
 
 VESSEL = json.loads((Path(__file__).resolve().parents[1] / "data" / "vessels" / "demo_mr2.json").read_text())
 TANKS = [t["id"] for t in VESSEL["tanks"] if t["type"] == "cargo"]
@@ -18,10 +23,14 @@ PLAN = solve(VESSEL, [Parcel(grade="ULSD", quantity_t=20000), Parcel(grade="Jet 
 DIGEST = stability_digest(PLAN["result"])
 
 
-def reply(content, prompt=100, completion=20):
+EXPLANATION = "Verdict: Safe to sail.\nWhy:\n- It sits level.\nWhat to do:\n- Nothing to change."
+CUT_OFF = "Verdict: Safe to sail.\nWhy:\n- It sits level, with sideways"
+
+
+def reply(content, prompt=100, completion=20, finish="stop"):
     r = mock.Mock()
     r.raise_for_status.return_value = None
-    r.json.return_value = {"choices": [{"message": {"content": content}}],
+    r.json.return_value = {"choices": [{"message": {"content": content}, "finish_reason": finish}],
                            "usage": {"prompt_tokens": prompt, "completion_tokens": completion}}
     return r
 
@@ -56,7 +65,7 @@ class TokenTests(unittest.TestCase):
 
     def test_repeat_explanation_is_served_from_cache(self):
         d = DIGEST
-        with mock.patch("app.llm.client.httpx.post", return_value=reply("Verdict: safe.")) as post, \
+        with mock.patch("app.llm.client.httpx.post", return_value=reply(EXPLANATION)) as post, \
                 usage.track() as used:
             first = tasks.explain(prompts.EXPLAIN_SYSTEM, d)
             second = tasks.explain(prompts.EXPLAIN_SYSTEM, d)
@@ -72,14 +81,14 @@ class TokenTests(unittest.TestCase):
         self.assertEqual(post.call_count, 2)
 
     def test_request_is_capped_and_asks_for_little_reasoning(self):
-        with mock.patch("app.llm.client.httpx.post", return_value=reply("ok")) as post:
+        with mock.patch("app.llm.client.httpx.post", return_value=reply(EXPLANATION)) as post:
             tasks.explain(prompts.EXPLAIN_SYSTEM, DIGEST)
         payload = post.call_args.kwargs["json"]
         self.assertEqual(payload["max_tokens"], config.MAX_TOKENS_EXPLAIN)
         self.assertEqual(payload["reasoning_effort"], config.REASONING_EFFORT)
 
     def test_usage_is_saved_per_user_per_day(self):
-        with mock.patch("app.llm.client.httpx.post", return_value=reply("ok", 120, 30)), usage.track("u1"):
+        with mock.patch("app.llm.client.httpx.post", return_value=reply(EXPLANATION, 120, 30)), usage.track("u1"):
             tasks.explain(prompts.EXPLAIN_SYSTEM, DIGEST)
         today = usage.summary("u1")["today"]
         self.assertEqual((today["prompt_tokens"], today["completion_tokens"], today["calls"]), (120, 30, 1))
@@ -102,9 +111,75 @@ class TokenTests(unittest.TestCase):
 
     def test_prompts_stay_short(self):
         limits = {"PARSE_ORDER_SYSTEM": 1100, "READ_DRAWING_SYSTEM": 1950, "STOWAGE_INSTRUCTIONS_SYSTEM": 1450,
-                  "EXPLAIN_SYSTEM": 650, "EXPLAIN_PLAN_SYSTEM": 700, "CLEANING_SYSTEM": 700}
+                  "EXPLAIN_SYSTEM": 690, "EXPLAIN_PLAN_SYSTEM": 740, "CLEANING_SYSTEM": 700}
         for name, limit in limits.items():
             self.assertLessEqual(len(getattr(prompts, name)), limit, name)
+
+
+class TruncationTests(unittest.TestCase):
+    """Cut-off or incomplete explanations are never shown or cached; the built-in one is used instead."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        for p in (mock.patch.object(cache, "enabled", True),  # other test modules switch the cache off
+                  mock.patch.object(config, "CACHE_DIR", Path(self.tmp.name)),
+                  mock.patch.object(config, "USER_DIR", Path(self.tmp.name)),
+                  mock.patch.object(config, "MODEL_BASE_URL", "http://model.test"),
+                  mock.patch.object(config, "MODEL_API_KEY", "test-key")):
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(self.tmp.cleanup)
+        self.result = calculate(VESSEL, [TankLoad("FOP", 300, 0.95)]).to_dict()
+
+    def test_explanation_cap_leaves_room_for_reasoning(self):
+        self.assertGreaterEqual(config.MAX_TOKENS_EXPLAIN, 2000)
+
+    def test_cut_off_reply_falls_back_to_the_built_in_explanation(self):
+        c = TestClient(app)
+        h = SignedIn(c)
+        with mock.patch("app.llm.client.httpx.post", return_value=reply(CUT_OFF, finish="length")):
+            r = c.post("/api/ai/explain", headers=h("ann"), json={"result": self.result}).json()
+        self.assertEqual(r["source"], "plain")
+        self.assertIn("What to do:", r["explanation"])
+        self.assertFalse(cache_has(Path(self.tmp.name), CUT_OFF))
+
+    def test_incomplete_reply_without_finish_reason_also_falls_back(self):
+        c = TestClient(app)
+        h = SignedIn(c)
+        with mock.patch("app.llm.client.httpx.post", return_value=reply(CUT_OFF)):
+            r = c.post("/api/ai/explain", headers=h("ann"), json={"result": self.result}).json()
+        self.assertEqual(r["source"], "plain")
+        self.assertFalse(cache_has(Path(self.tmp.name), CUT_OFF))
+
+    def test_complete_reply_is_used_and_cached(self):
+        c = TestClient(app)
+        h = SignedIn(c)
+        with mock.patch("app.llm.client.httpx.post", return_value=reply(EXPLANATION)):
+            r = c.post("/api/ai/explain", headers=h("ann"), json={"result": self.result}).json()
+        self.assertEqual((r["source"], r["explanation"]), ("ai", EXPLANATION))
+        self.assertTrue(cache_has(Path(self.tmp.name), EXPLANATION))
+
+    def test_plan_explanation_falls_back_too(self):
+        from app.stowage import pipeline
+        digest = plan_digest(solve(VESSEL, [Parcel(grade="ULSD", quantity_t=20000)]))
+        with mock.patch("app.llm.client.httpx.post", return_value=reply(CUT_OFF, finish="length")):
+            text, source = pipeline._explain(digest, [])
+        self.assertEqual(source, "plain")
+        self.assertIn("What to do:", text)
+
+    def test_check_explanation(self):
+        from app.llm import client, tasks
+        tasks._check_explanation(EXPLANATION)
+        tasks._check_explanation("Verdict: Safe.\nWhy:\n- Level.\nWhat to do:\n- Check trim (2.29 m by stern)")
+        for bad in ("Verdict: Safe.\nWhy:\n- Level.", CUT_OFF, "Verdict: Safe.\nWhy:\n- Level.\nWhat to do:\n- Allow for slosh"):
+            with self.assertRaises(client.ModelError):
+                tasks._check_explanation(bad)
+
+
+def cache_has(folder: Path, text: str) -> bool:
+    """Whether any cached reply contains `text` (values are read from the JSON, so newlines match)."""
+    path = folder / "llm.json"
+    return path.exists() and any(text in e["v"] for e in json.loads(path.read_text(encoding="utf-8")).values())
 
 
 if __name__ == "__main__":

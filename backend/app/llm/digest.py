@@ -20,7 +20,7 @@ def stability_digest(r: dict) -> dict:
         "ok": bool(r.get("all_passed")),
         "checks": len(crit),
         "fails": [{"id": c["id"], "name": c["description"], "actual": _r(c["actual"], 3), "min": c["required"],
-                   "unit": c["unit"]} for c in crit if not c["passed"]],
+                   "unit": c["unit"], "limit": c.get("limit", "min")} for c in crit if not c["passed"]],
         "disp_t": _r(r.get("displacement_t"), 0),
         "draft_fwd_m": _r(r.get("draught_fwd_m")),
         "draft_aft_m": _r(r.get("draught_aft_m")),
@@ -30,8 +30,16 @@ def stability_digest(r: dict) -> dict:
         "gm_m": _r(r.get("gm_fluid_m")),
         "gm_min_m": gm_min,
         "slosh_m": _r(r.get("free_surface_correction_m")),
+        # Hull girder strength: peak still-water shear force and bending moment as % of the sea limits.
+        **({"sf_pct": _r(r["max_sf_pct"], 0), "bm_pct": _r(r["max_bm_pct"], 0), "bm_mode": _bm_mode(r)}
+           if r.get("max_sf_pct") is not None else {}),
         "warnings": r.get("warnings", []),
     }
+
+
+def _bm_mode(r: dict) -> str:
+    peak = max(r.get("strength") or [{"bm_pct": 0, "mode": "hog"}], key=lambda p: p["bm_pct"])
+    return "hogging" if peak["mode"] == "hog" else "sagging"
 
 
 def _tanks(ids: list[str]) -> str:
@@ -70,6 +78,10 @@ def plan_digest(plan: dict) -> dict:
            if (plan.get("cleaning") or {}).get("ports") else {}),
         **({"cleaning_saving": saving_text(plan["cleaning"]["saving"])}
            if (plan.get("cleaning") or {}).get("saving") else {}),
+        # Ballast that would bring the trim back to normal, per port, only where it is off.
+        **({"ballast": lines} if (lines := ballast_lines(plan.get("voyage_check"))) else {}),
+        # The voyage check, only when it found something: blocked lines or ports, unsafe port conditions, swaps.
+        **({"voyage_check": voyage_lines(plan["voyage_check"])} if voyage_lines(plan.get("voyage_check")) else {}),
     }
 
 
@@ -84,6 +96,29 @@ def _cleaning_groups(report: dict | None) -> list[dict]:
                                         "level": c["level"], "reason": c["reason"], "steps": c["steps"], "checks": c["checks"]})
             g["tanks"].append(c["tank"])
     return list(groups.values())
+
+
+def ballast_lines(report: dict | None) -> list[str]:
+    out = []
+    for p in (report or {}).get("ports", []):
+        b = p.get("ballast")
+        if b and b.get("tanks"):
+            trim = lambda v: f"{abs(v):.2f} m by the {'stern' if v >= 0 else 'head'}"  # noqa: E731
+            out.append(f"Leaving {p['port']}: {b['total_t']:,} t ballast in {_tanks([r['tank'] for r in b['tanks']])} "
+                       f"takes the trim from {trim(b['trim_before'])} to {trim(b['trim_after'])}"
+                       + ("" if b["reached"] else " (best achievable)"))
+    return out
+
+
+def voyage_lines(report: dict | None) -> list[str]:
+    """One short line per blocking issue or warning, plus the suggested swaps (notes such as sealed crossovers left out)."""
+    if not report:
+        return []
+    out = [f"{i['message']} ({'blocking' if i['severity'] == 'block' else 'warning'})"
+           for i in report.get("issues", []) if i["severity"] in ("block", "warn")]
+    if s := report.get("suggestion"):
+        out.append("suggested: " + "; then ".join(f"{m['kind']} {m['grade']} {m['from']} -> {m['to']}" for m in s["moves"]))
+    return out
 
 
 def saving_text(s: dict) -> str:
@@ -132,15 +167,18 @@ def for_model(d: dict) -> dict:
                           for a in d["alloc"]],
                 "stability": for_model(d["stability"]) if d["stability"] else None,
                 "warnings": d["warnings"], "cargo_basis": d.get("basis", []), "assumed": d.get("assumed", []),
-                **{k: d[k] for k in ("stages", "cleaning", "cleaning_saving") if d.get(k)}}
+                **{k: d[k] for k in ("stages", "cleaning", "cleaning_saving", "voyage_check", "ballast") if d.get(k)}}
     return {
         "safe": d["ok"], "checks": d["checks"],
-        "failed_checks": [f"{f['name']}: {f['actual']} {f['unit']} (minimum {f['min']} {f['unit']})" for f in d["fails"]],
+        "failed_checks": [f"{f['name']}: {f['actual']} {f['unit']} ({'maximum' if f.get('limit') == 'max' else 'minimum'} "
+                          f"{f['min']} {f['unit']})" for f in d["fails"]],
         "total_weight": _fmt(d["disp_t"], "t", 0),
         "depth_in_water": f"{_fmt(d['draft_fwd_m'], 'm')} at the front, {_fmt(d['draft_aft_m'], 'm')} at the back",
         "trim": f"{_fmt(d['trim_m'], 'm')} deeper at the {d['trim_by']}",
         "list": "cannot stay upright" if d["list_deg"] is None else _fmt(abs(d["list_deg"]), "degrees", 1),
         "GM": f"{_fmt(d['gm_m'], 'm')} (minimum {_fmt(d['gm_min_m'], 'm')})",
         "slosh_loss": _fmt(d["slosh_m"], "m"),
+        **({"hull_stress": f"shear force {d['sf_pct']:g}% and bending moment {d['bm_pct']:g}% ({d['bm_mode']}) "
+                           f"of the safe sea limit"} if d.get("sf_pct") is not None else {}),
         "warnings": d["warnings"],
     }

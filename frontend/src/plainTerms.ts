@@ -7,6 +7,7 @@ export const CRITERION_MEANING: Record<string, string> = {
   AREA_30_40: "How much fight-back the ship still has between 30° and 40° of roll.",
   GZ_AT_30: "How hard the ship pushes back when rolled to 30° or more.",
   ANGLE_GZ_MAX: "How far it can roll before its push-back starts to weaken.",
+  STRENGTH_LIMIT: "Whether the cargo's weight along the ship bends or shears the hull more than is safe at sea.",
 };
 
 export const STAT_MEANING: Record<string, string> = {
@@ -16,4 +17,5 @@ export const STAT_MEANING: Record<string, string> = {
   list: "Sideways lean. Zero means upright.",
   gm: "Self-righting strength. Bigger means steadier.",
   free: "Strength lost to liquid sloshing in part-full tanks.",
+  stress: "How hard the cargo pulls (shear) and bends the hull lengthwise, as a share of its safe limit at sea. Under 100% is safe. Sagging: heavy in the middle; hogging: heavy at the ends.",
 };

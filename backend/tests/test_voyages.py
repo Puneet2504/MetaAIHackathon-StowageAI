@@ -100,5 +100,40 @@ class PlainExplanationTests(unittest.TestCase):
         self.assertTrue(used <= allowed | tank_numbers, used - allowed - tank_numbers)
 
 
+class SummaryTests(unittest.TestCase):
+    def test_same_grade_in_two_parcels_is_one_entry(self):
+        from app.stowage.pipeline import voyage_summary
+        parcels = [Parcel(grade="ULSD", quantity_t=12000, load_port="Rotterdam", discharge_port="Le Havre"),
+                   Parcel(grade="ULSD", quantity_t=8000, load_port="Rotterdam", discharge_port="Bilbao")]
+        plan = solve(vessels.get("demo_mr2"), parcels)
+        s = voyage_summary({"parcels": [p.model_dump() for p in parcels], "plan": plan})
+        self.assertEqual([g["grade_id"] for g in s["grades"]], ["ULSD"])
+        self.assertAlmostEqual(s["grades"][0]["tonnes"], 20000, delta=2)
+        self.assertEqual(s["total_t"], s["grades"][0]["tonnes"])
+
+    def test_same_grade_at_a_later_port_is_one_entry(self):
+        from app.stowage.pipeline import voyage_summary
+        alloc = lambda t, port_tanks: {"grade": "ULSD", "grade_id": "ULSD", "tonnes": t, "allocated_m3": 0,
+                                       "density_t_m3": 0.845, "tanks": port_tanks}
+        record = {"parcels": [], "plan": {"allocation": [alloc(10000, ["COT1P"])], "result": None,
+                                          "stages": [{"allocation": [alloc(5000, ["COT2P"])], "result": None}]}}
+        grades = voyage_summary(record)["grades"]
+        self.assertEqual(len(grades), 1)
+        self.assertEqual(grades[0]["tonnes"], 15000)
+
+
+class DemoSeedTests(unittest.TestCase):
+    def test_seeded_voyage_has_stages_and_cleaning(self):
+        from app import demo_seed
+        from app.stowage import pipeline
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(config, "USER_DIR", Path(tmp)):
+            demo_seed.seed_workspace("demo-user")
+            [v] = pipeline.list_voyages("demo-user")
+            record = pipeline.get_voyage("demo-user", v["id"])
+        self.assertEqual(record["plan"]["stages"], [])
+        self.assertTrue({"ports", "total", "tanks_to_clean"} <= set(record["plan"]["cleaning"]))
+        self.assertIn("tanks_to_clean", record["voyage"])
+
+
 if __name__ == "__main__":
     unittest.main()

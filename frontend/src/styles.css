@@ -470,3 +470,48 @@ input.estimated { border-color: var(--warn) !important; box-shadow: inset 0 0 0 
 .stage-picker { margin-bottom: 0.5rem; }
 .clean-chip { color: var(--warn); font-weight: 600; }
 .saving { display: flex; gap: 0.4rem; align-items: flex-start; background: var(--pass-soft); color: var(--pass); border-radius: 10px; padding: 0.5rem 0.75rem; }
+/* Hull stress card: amber near the limit, red over it. */
+.stat.warn { border-color: var(--warn); background: var(--warn-soft); }
+.stat.warn .stat-icon { background: var(--warn-soft); color: var(--warn); }
+.stat.fail { border-color: var(--fail); background: var(--fail-soft); }
+.stat.fail .stat-icon { background: var(--fail-soft); color: var(--fail); }
+
+/* Voyage check: ports in order, issues, and suggested tank swaps. */
+.voyage-check { margin-top: 1.25rem; }
+.voyage-check h2 { display: flex; align-items: center; gap: 0.4rem; }
+.port-timeline { list-style: none; display: flex; flex-wrap: wrap; gap: 0.4rem; padding: 0; margin: 0.6rem 0; }
+.port-timeline li { display: flex; align-items: center; gap: 0.35rem; border: 1px solid var(--line); border-radius: 999px;
+  padding: 0.2rem 0.7rem 0.2rem 0.3rem; background: var(--panel-2); }
+.port-timeline li + li::before { content: "→"; color: var(--muted); margin: 0 0.3rem 0 -0.1rem; }
+.port-dot { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--line); }
+.port-timeline li.pass .port-dot { background: var(--pass-soft); color: var(--pass); }
+.port-timeline li.fail { border-color: var(--fail); }
+.port-timeline li.fail .port-dot { background: var(--fail-soft); color: var(--fail); }
+.port-name { font-weight: 600; }
+.check-issues { list-style: none; padding: 0; margin: 0.5rem 0; display: grid; gap: 0.3rem; }
+.check-issues li { border-radius: 8px; padding: 0.4rem 0.6rem; }
+.check-issues li.block { background: var(--fail-soft); color: var(--fail); }
+.check-issues li.warn { background: var(--warn-soft); color: var(--warn); }
+.swap-suggestion { border: 1px dashed var(--accent); border-radius: 10px; padding: 0.6rem 0.8rem; margin: 0.6rem 0; background: var(--accent-soft); }
+.swap-suggestion h3 { margin: 0 0 0.3rem; display: flex; align-items: center; gap: 0.35rem; font-size: 1rem; }
+.swap-suggestion ol { margin: 0 0 0.4rem; padding-left: 1.3rem; }
+.manual-chip { margin-left: 0.5rem; }
+
+/* Open space: per ship, what is empty after each port and what the AI says fits. */
+.open-ship { margin-bottom: 1rem; }
+.space-ports { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0.75rem; margin: 0.6rem 0; }
+.space-port { border: 1px solid var(--line); border-radius: 10px; padding: 0.6rem 0.75rem; background: var(--panel-2); }
+.space-port h3 { margin: 0 0 0.3rem; font-size: 1rem; }
+.space-summary { display: flex; gap: 0.4rem; align-items: flex-start; font-weight: 500; }
+.space-offers { list-style: none; padding: 0; margin: 0.4rem 0; display: grid; gap: 0.5rem; }
+.space-offers > li { border: 1px solid var(--line); border-left: 4px solid var(--pass); border-radius: 10px; padding: 0.55rem 0.75rem; }
+.space-offers > li.unverified { border-left-color: var(--warn); }
+.space-offers p { margin: 0.2rem 0; }
+.warn-text { color: var(--warn); }
+
+/* Ballast preview and later additions. */
+.ballast-preview { border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 10px; padding: 0.55rem 0.75rem; margin: 0.6rem 0; background: var(--panel-2); }
+.ballast-preview.partial { border-left-color: var(--warn); }
+.ballast-head { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; margin: 0 0 0.3rem; }
+.amendments { margin-top: 0.6rem; }
+.amendments h3 { margin: 0 0 0.2rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }

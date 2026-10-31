@@ -169,6 +169,36 @@ def estimate_lightship(h: Hull) -> dict:
                 {"xAft": round(0.864 * L, 1), "xFwd": L, "weight": round(w * 0.106, 0)}]}
 
 
+# Still-water strength limits along the length, as a share of the midship value (demo factors, not class rules).
+STRENGTH_STATIONS = [0.15, 0.30, 0.45, 0.50, 0.65, 0.80, 0.85]
+BM_FACTOR = [0.40, 0.85, 1.00, 1.00, 0.95, 0.60, 0.45]
+SF_FACTOR = [0.85, 1.00, 0.80, 0.75, 0.85, 1.00, 0.85]
+
+
+def strength_limits(lbp: float, displacement_full: float) -> dict:
+    """Synthetic sea and harbour shear force (t) and bending moment (t.m) limits at seven stations.
+
+    Scaled from the full-load displacement and length: bending sea limit Δ·L/45 at midships, shear
+    Δ/9 where it peaks (about a quarter length from each end). Harbour limits are 25% higher, and the
+    sagging limit is 90% of the hogging one. Typical of a product tanker, for demos only.
+    """
+    bm_mid, sf_peak = displacement_full * lbp / 45, displacement_full / 9
+    points = []
+    for s, fb, fs in zip(STRENGTH_STATIONS, BM_FACTOR, SF_FACTOR):
+        hog, sf = bm_mid * fb, sf_peak * fs
+        points.append({"frame": f"{s:.2f}L", "x": round(s * lbp, 1),
+                       "sf": {"seaMax": round(sf, -1), "harbourMax": round(1.25 * sf, -1)},
+                       "bm": {"seaHogMax": round(hog, -2), "seaSagMax": round(0.9 * hog, -2),
+                              "harbourHogMax": round(1.25 * hog, -2), "harbourSagMax": round(1.125 * hog, -2)}})
+    return {"readingPoints": points}
+
+
+def strength_for(vessel: dict) -> dict:
+    """Strength limits for a ship saved without them, from its own length and hydrostatics."""
+    full = max((r["displacement"] for r in vessel.get("hydrostatics", [])), default=0)
+    return strength_limits(vessel["particulars"]["lbp"], full) if full else {"readingPoints": []}
+
+
 def build_vessel(layout: VesselLayout, vessel_id: str, *, lightship: dict | None = None,
                  cargo_system: dict | None = None, constants: list | None = None,
                  source: dict | None = None, add_service_tanks: bool = True) -> dict:
@@ -211,7 +241,7 @@ def build_vessel(layout: VesselLayout, vessel_id: str, *, lightship: dict | None
         "crossCurves": cross,
         "tanks": tanks,
         "cargoSystem": cargo_system or _cargo_system(tanks),
-        "strength": {"readingPoints": []},  # TODO: add when shear/bending is implemented
+        "strength": strength_limits(h.lbp, hyd[-1]["displacement"]),
         "draughtMarks": {"forwardX": h.lbp, "midshipX": h.lbp / 2, "aftX": 0.0},
         "constants": constants if constants is not None else [
             {"name": "Crew, stores and provisions", "weight": 300,

@@ -183,5 +183,35 @@ class FillRuleTests(unittest.TestCase):
         self.assertEqual([m["kind"] for m in out["memory_used"]].count("fill_mode"), 1)
 
 
+class AliasFastPathTests(unittest.TestCase):
+    """A remembered grade name ("GO 10 means ULSD") works in instructions handled by code, with no model call."""
+    CARGO = [f"COT{n}{s}" for n in range(1, 7) for s in "PS"]
+    ALIASES = {"go 10": "ULSD"}
+
+    def test_alias_in_a_tank_rule(self):
+        from app.llm.fast_paths import try_instruction
+        out = try_instruction("put GO 10 in 3", self.CARGO, ["ULSD"], {}, self.ALIASES)
+        self.assertEqual(out.constraints.fixed_grades, {"COT3P": "ULSD", "COT3S": "ULSD"})
+        self.assertIsNone(try_instruction("put GO 10 in 3", self.CARGO, ["ULSD"], {}))
+
+    def test_alias_in_a_cargo_temperature(self):
+        from app.llm.fast_paths import try_instruction
+        out = try_instruction("GO 10 at 35 C", self.CARGO, ["ULSD"], {}, self.ALIASES)
+        self.assertEqual((out.parcel_updates[0].grade, out.parcel_updates[0].temp_c), ("ULSD", 35))
+
+    def test_remembered_alias_is_used_when_planning(self):
+        from app.llm import client
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(config, "USER_DIR", Path(tmp)), \
+                mock.patch.object(config, "MODEL_BASE_URL", ""), \
+                mock.patch.object(client, "_post", side_effect=AssertionError("the model was called")):
+            c = TestClient(app)
+            h = SignedIn(c)
+            body = {"vessel_id": "demo_mr2", "parcels": [{"grade": "ULSD", "quantity_t": 20000}]}
+            c.post("/api/stowage/plan", headers=h("ann"), json={**body, "instructions": "remember GO 10 means ULSD"})
+            r = c.post("/api/stowage/plan", headers=h("ann"), json={**body, "instructions": "put GO 10 in 3"})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(r.json()["applied_constraints"]["fixed_grades"].get("COT3P"), "ULSD")
+
+
 if __name__ == "__main__":
     unittest.main()

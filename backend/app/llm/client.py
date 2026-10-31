@@ -6,7 +6,7 @@ access to the Meta Model API or an inference partner, and adjust _post() if need
 """
 import json
 import re
-from typing import TypeVar
+from typing import Callable, TypeVar
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -33,7 +33,8 @@ def _user_content(user: str, image: str | None):
 
 
 def _post(messages: list[dict], temperature: float = 0.0, model: str | None = None,
-          json_mode: bool = False, max_tokens: int | None = None, effort: str | None = None) -> str:
+          json_mode: bool = False, max_tokens: int | None = None, effort: str | None = None,
+          cache_reply: bool = True) -> str:
     if not config.model_configured():
         raise ModelNotConfigured(
             "No model configured. Set MODEL_BASE_URL, MODEL_API_KEY and MODEL_NAME in backend/.env")
@@ -56,14 +57,17 @@ def _post(messages: list[dict], temperature: float = 0.0, model: str | None = No
                        headers=headers, timeout=config.MODEL_TIMEOUT_S)
         r.raise_for_status()
         body = r.json()
-        content = body["choices"][0]["message"]["content"]
+        choice = body["choices"][0]
+        if choice.get("finish_reason") == "length":  # hit the output cap: never pass off or cache a partial reply
+            raise ModelError("Model reply was cut off (finish_reason=length)")
+        content = choice["message"]["content"]
         if not content:
             raise ValueError("empty reply (output cap reached?)")
     except (httpx.HTTPError, KeyError, IndexError, ValueError) as e:
         raise ModelError(f"Model call failed: {e}") from e
     u = body.get("usage") or {}
     usage.record(u.get("prompt_tokens", 0), u.get("completion_tokens", 0), call=True)
-    if not json_mode:
+    if not json_mode and cache_reply:
         cache.put(k, content)  # JSON replies are cached by chat_model once they validate
     return content
 
@@ -80,8 +84,16 @@ def _parse(raw: str) -> dict:
     return data
 
 
-def chat_text(system: str, user: str, max_tokens: int | None = None) -> str:
-    return _post(_messages(system, user), temperature=0.2, max_tokens=max_tokens).strip()
+def chat_text(system: str, user: str, max_tokens: int | None = None,
+              validate: Callable[[str], None] | None = None) -> str:
+    """Plain-text reply. With `validate` (raises ModelError on a bad reply), only a reply that passes is cached."""
+    messages = _messages(system, user)
+    if validate is None:
+        return _post(messages, temperature=0.2, max_tokens=max_tokens).strip()
+    text = _post(messages, temperature=0.2, max_tokens=max_tokens, cache_reply=False).strip()
+    validate(text)
+    cache.put(cache.key(config.MODEL_NAME, messages, max_tokens, config.REASONING_EFFORT), text)
+    return text
 
 
 def chat_model(system: str, user: str, schema: type[T], image: str | None = None,

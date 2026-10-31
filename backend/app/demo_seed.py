@@ -2,7 +2,6 @@
 from . import config, memory, vessels
 from .schemas import ConstraintsIn, LayoutTank, MemoryOp, Parcel, VesselLayout
 from .stowage import pipeline
-from .stowage.solver import solve
 from .vessel_builder import build_vessel
 
 SAMPLE_ORDER = "Load Rotterdam: 20,000 mt ULSD, 12,000 mt Jet A-1. Discharge ULSD at Le Havre, Jet at Bilbao."
@@ -58,7 +57,7 @@ def seed_workspace(user_id: str) -> None:
 
     demo = vessels.get("demo_mr2")
     if demo is not None:
-        plan = solve(demo, SAMPLE_PARCELS)
+        plan = pipeline._plan_stages(demo, SAMPLE_PARCELS, ConstraintsIn(), None, {}, None)  # stages + cleaning
         pipeline.approve(user_id, {"vessel_id": "demo_mr2", "order_text": SAMPLE_ORDER,
                                    "parcels": [p.model_dump() for p in SAMPLE_PARCELS],
                                    "constraints": ConstraintsIn().model_dump(), "plan": plan}, demo)

@@ -5,10 +5,12 @@ import HullPlan, { type TankState } from "./HullPlan";
 import Icon from "./Icons";
 import Cleaning from "./Cleaning";
 import Quantities from "./Quantities";
+import VoyageCheck from "./VoyageCheck";
+import { SpaceSuggestions } from "./OpenSpace";
 import StabilityPanel, { Explanation } from "./StabilityPanel";
 import type { VesselModel } from "./types/vessel-model";
 import type { ApprovedPlanSummary, MemoryItem, Parcel, PlanResponse, PlanStage, StabilityResult, StowageConstraints,
-  TankLoad } from "./types/api";
+  OpenSpaceShip, SpaceAnswer, SpaceOffer, TankLoad, VoyageCheckReport } from "./types/api";
 
 // Fixed bunkers and fresh water for the demo condition; only those tanks the ship has are used.
 // The solver uses the same values on the server (app/stowage/solver.py).
@@ -92,6 +94,16 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
   const [approved, setApproved] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
   const [stageView, setStageView] = useState(0);  // 0: departure condition; n: after the n-th reload port
+  // The order's parcels and text stay known after hand edits, so a hand-edited condition can be checked port by port.
+  const [orderParcels, setOrderParcels] = useState<{ parcels: Parcel[]; order: string } | null>(null);
+  const [manualCheck, setManualCheck] = useState<VoyageCheckReport | null>(null);
+  const [applying, setApplying] = useState(false);
+  // Open space on this ship's current voyage, and what the AI says still fits (for charterers placing an order).
+  const [space, setSpace] = useState<OpenSpaceShip | null>(null);
+  const [spaceAnswer, setSpaceAnswer] = useState<SpaceAnswer | null>(null);
+  const [askingSpace, setAskingSpace] = useState(false);
+  const [addingSpace, setAddingSpace] = useState<number | null>(null);
+  const [spaceAdded, setSpaceAdded] = useState<string | null>(null);
   const approvingRef = useRef(false);  // set at once, so a fast second click can't approve twice
   // The order text the current plan was made from; saved with the voyage on approval.
   const [plannedOrder, setPlannedOrder] = useState<string | null>(null);
@@ -109,7 +121,36 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
       .then(setVessel)
       .catch((e) => setLoadError(`Couldn't load the vessel. Is the backend running on port 8000? (${e.message})`));
     api.listPlans(vesselId).then(setHistory).catch(() => setHistory([]));
+    api.openSpaceFor(vesselId).then(setSpace).catch(() => setSpace(null));
   }, [vesselId]);
+
+  const askSpace = async () => {
+    setAskingSpace(true);
+    try { setSpaceAnswer(await api.openSpaceSuggest(vesselId)); }
+    catch (e) { setSpaceAnswer(null); setPlanError((e as Error).message); }
+    finally { setAskingSpace(false); }
+  };
+
+  // Add a verified suggestion straight into the ship's current voyage (no new voyage, existing cargo stays put).
+  const addToVoyage = async (s: SpaceOffer) => {
+    const voyage = space?.voyage;
+    if (!voyage || !window.confirm(`Add ${Math.round(s.quantity_t).toLocaleString()} mt ${s.grade} at ${s.port} for ${s.discharge_port} to the current voyage?`)) return;
+    setAddingSpace(spaceAnswer?.ai?.suggestions.indexOf(s) ?? 0);
+    try {
+      await api.addToVoyage(voyage.id, s);
+      setSpaceAdded(`${s.order_line} Added to the current voyage.`);
+      setSpaceAnswer(null);
+      setSpace(await api.openSpaceFor(vesselId));
+      api.listPlans(vesselId).then(setHistory).catch(() => {});
+    } catch (e) { setPlanError((e as Error).message); }
+    finally { setAddingSpace(null); }
+  };
+
+  // Add a suggestion to the order box; the current voyage's order goes in too, so its cargo is replanned with it.
+  const addToOrder = (line: string) => {
+    const current = space?.voyage?.order_text?.trim() ?? "";
+    setOrder((o) => (current && !o.includes(current) ? `${current} ${line}` : `${o.trim()} ${line}`.trim()));
+  };
 
   const cargoTanks = useMemo(
     () => (vessel?.tanks ?? []).filter((t) => t.type === "cargo" || t.type === "slop"),
@@ -130,6 +171,7 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
       else next[t.id] = t.side === "S" ? { grade: "ULSD", fillPct: 98 } : { grade: null, fillPct: 0 };
     });
     reqRef.current++;
+    setManualCheck(null);
     setState(next);
     setResult(null);
     setExplanation(null);
@@ -140,6 +182,8 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
 
   const update = (id: string, patch: Partial<TankState>) => {
     reqRef.current++;
+    setManualCheck(null);
+    setApproved(null);
     setState((s) => ({ ...s, [id]: { ...s[id], ...patch } }));
     setResult(null);
     setExplanation(null);
@@ -147,10 +191,10 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
     setPlan(null); // a manual change means the AI plan no longer applies
   };
 
-  const buildLoads = (): TankLoad[] => {
+  const buildLoads = (from: Record<string, TankState> = state): TankLoad[] => {
     const loads: TankLoad[] = [];
     cargoTanks.forEach((t) => {
-      const s = state[t.id];
+      const s = from[t.id];
       const g = gradeById(s?.grade ?? null);
       if (!g || !s.fillPct) return;
       loads.push({ tank_id: t.id, volume_m3: (t.capacity100 * s.fillPct) / 100, density_t_m3: s.density ?? g.density, grade: g.id });
@@ -173,7 +217,9 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
   const showPlan = (r: PlanResponse) => {
     setPlan(r);
     setApproved(null);
+    setOrderParcels({ parcels: r.parcels, order: plannedOrder ?? order });
     setStageView(0);
+    setManualCheck(null);
     r.plan.allocation.forEach((a) => addGrade(a.grade_id, a.grade, a.density_t_m3));
     const density: Record<string, number> = Object.fromEntries(r.plan.allocation.map((a) => [a.grade_id, a.density_t_m3]));
     const next: Record<string, TankState> = {};
@@ -208,7 +254,11 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
       });
       if (n !== reqRef.current) return;
       showPlan(r);
-      if (fresh) setPlannedOrder(opts.parcels ? SAMPLE_ORDER : order);
+      if (fresh) {
+        const text = opts.parcels ? SAMPLE_ORDER : order;
+        setPlannedOrder(text);
+        setOrderParcels({ parcels: r.parcels, order: text });
+      }
       setInstruction("");
     } catch (e) { if (n === reqRef.current) setPlanError((e as Error).message); }
     finally { if (planReq.current === n) setPlanning(false); }
@@ -229,15 +279,50 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
 
   const reject = () => { setPlan(null); setApproved(null); setMemoryOff([]); applyPreset("clear"); };
 
-  const runCheck = async () => {
+  // Stability of the condition on departure, and, when the order is known, the voyage check through its ports.
+  const runCheck = async (from: Record<string, TankState> = state) => {
     const n = ++reqRef.current;
     checkReq.current = n;
-    setChecking(true); setCheckError(null); setExplanation(null);
+    setChecking(true); setCheckError(null); setExplanation(null); setManualCheck(null);
+    const loads = buildLoads(from);
     try {
-      const r = await api.check(vesselId, buildLoads());
-      if (n === reqRef.current) setResult(r);
+      const [r, v] = await Promise.all([
+        api.check(vesselId, loads),
+        orderParcels ? api.checkVoyage({ vessel_id: vesselId, parcels: orderParcels.parcels, loads }) : Promise.resolve(null),
+      ]);
+      if (n === reqRef.current) { setResult(r); setManualCheck(v?.check ?? null); }
     } catch (e) { if (n === reqRef.current) { setResult(null); setCheckError((e as Error).message); } }
     finally { if (checkReq.current === n) setChecking(false); }
+  };
+
+  // Put the suggested tank swaps into the tanks, then check everything again.
+  const applySwaps = async () => {
+    const swap = manualCheck?.suggestion;
+    if (!swap) return;
+    setApplying(true);
+    const next: Record<string, TankState> = {};
+    cargoTanks.forEach((t) => {
+      const l = swap.loads.find((x) => x.tank_id === t.id);
+      next[t.id] = l ? { grade: l.grade ?? null, fillPct: Math.round((1000 * l.volume_m3) / t.capacity100) / 10, density: l.density_t_m3 }
+        : { grade: null, fillPct: 0 };
+    });
+    setState(next);
+    await runCheck(next);
+    setApplying(false);
+  };
+
+  // A hand-edited condition that passes stability and the voyage check can be approved; the server checks it again.
+  const approveManual = async () => {
+    if (!orderParcels || approvingRef.current) return;
+    approvingRef.current = true;
+    setApproving(true);
+    try {
+      const r = await api.approveManual({ vessel_id: vesselId, order_text: orderParcels.order, parcels: orderParcels.parcels,
+        loads: buildLoads() });
+      setApproved(r.id);
+      api.listPlans(vesselId).then(setHistory).catch(() => {});
+    } catch (e) { setCheckError((e as Error).message); }
+    finally { approvingRef.current = false; setApproving(false); }
   };
 
   const runExplain = async () => {
@@ -310,6 +395,24 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
           <Icon name="sparkle" size={18} /> {planning ? "Planning…" : "Plan this voyage"}
         </button>
         {planError && <p className="error">{planError}</p>}
+        {space?.voyage && (
+          <details className="manual open-space-panel">
+            <summary>Open space on this ship's current voyage</summary>
+            <p className="muted small">
+              Empty tanks after each port: {space.voyage.facts.ports.map((p) => `${p.port}: ${p.empty.map((e) => e.tanks).join(", ") || "none"}`).join(" · ")}.
+              Adding a suggestion puts the current voyage's order in the box too, so all its cargo is replanned together.
+            </p>
+            {!spaceAnswer && (
+              <button className="small-btn" onClick={askSpace} disabled={askingSpace}>
+                {askingSpace ? <span className="spinner" aria-hidden="true" /> : <Icon name="sparkle" size={14} />}
+                {askingSpace ? " The AI is checking…" : " Ask AI what fits"}
+              </button>
+            )}
+            {spaceAnswer && <SpaceSuggestions answer={spaceAnswer} onUse={addToOrder} useLabel="Add to order"
+              onAdd={addToVoyage} adding={addingSpace} />}
+            {spaceAdded && <p className="saving" role="status"><Icon name="approve" size={16} /> {spaceAdded}</p>}
+          </details>
+        )}
         {plan && (memoryChips.length > 0 || memoryOff.length > 0) && (
           <div className="memory-row">
             <span className="small muted"><Icon name="memory" size={14} /> Using memory:</span>
@@ -416,7 +519,8 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
                   <div className="approve">
                     <div className="presets">
                       <button className="primary" onClick={approve}
-                        disabled={!p.result || p.status === "fails_criteria" || approving || planning}>
+                        disabled={!p.result || p.status === "fails_criteria" || approving || planning
+                          || (p.voyage_check ? !p.voyage_check.ok : false)}>
                         {approving && <span className="spinner" aria-hidden="true" />}{approving ? "Approving…" : "Approve plan"}
                       </button>
                       <button onClick={reject} disabled={approving}>Reject</button>
@@ -480,7 +584,7 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
                 ? `Bunkers and fresh water are fixed for the demo: ${fixed.map((f) => `${f.tank_id} ${f.volume_m3} m³`).join(", ")}.`
                 : "This ship has no standard bunker or fresh water tanks, so none are included."}
             </p>
-            <button className="primary" onClick={runCheck} disabled={checking}>
+            <button className="primary" onClick={() => runCheck()} disabled={checking}>
               {checking ? "Checking…" : "Check stability"}
             </button>
             {checkError && <p className="error">{checkError}</p>}
@@ -529,6 +633,26 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
           )}
         </section>
       </div>
+      {p?.voyage_check && <VoyageCheck report={p.voyage_check} />}
+      {!plan && manualCheck && (
+        <VoyageCheck report={manualCheck} onApply={applySwaps} applying={applying}>
+          {approved ? (
+            <div className="approved-box">
+              <p className="verdict pass"><Icon name="approve" size={20} /> Approved and saved as a voyage.</p>
+              <button className="primary small-btn" onClick={() => onOpenVoyage(approved)}>View in Voyages</button>
+            </div>
+          ) : (
+            <div className="presets">
+              <button className="primary" onClick={approveManual}
+                disabled={!manualCheck.ok || !result?.all_passed || approving || checking}
+                title={!manualCheck.ok ? "Fix the problems above first" : !result?.all_passed ? "The condition fails its stability checks" : undefined}>
+                {approving && <span className="spinner" aria-hidden="true" />}{approving ? "Approving…" : "Approve this condition"}
+              </button>
+              <span className="muted small">Approves the tanks as you set them, for the order: {orderParcels?.order.slice(0, 80)}</span>
+            </div>
+          )}
+        </VoyageCheck>
+      )}
       {p?.cleaning && <Cleaning key={JSON.stringify(p.cleaning).length + (plan?.parcels.length ?? 0)} report={p.cleaning} />}
     </>
   );

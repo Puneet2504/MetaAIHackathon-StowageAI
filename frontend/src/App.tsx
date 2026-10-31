@@ -5,6 +5,7 @@ import Icon from "./Icons";
 import { Brand } from "./Illustrations";
 import Login from "./Login";
 import Memory from "./Memory";
+import OpenSpace from "./OpenSpace";
 import NewShip from "./NewShip";
 import Planner from "./Planner";
 import ShipLibrary from "./ShipLibrary";
@@ -19,11 +20,13 @@ export type View =
   | { kind: "edit"; id?: string; copyFrom?: string }
   | { kind: "voyages" }
   | { kind: "voyage"; id: string }
-  | { kind: "memory" };
+  | { kind: "memory" }
+  | { kind: "openspace" };
 
-const TABS: { kind: "library" | "voyages" | "memory"; label: string; icon: string; covers: View["kind"][] }[] = [
+const TABS: { kind: "library" | "voyages" | "openspace" | "memory"; label: string; icon: string; covers: View["kind"][] }[] = [
   { kind: "library", label: "Ships", icon: "ship", covers: ["library", "planner", "edit"] },
   { kind: "voyages", label: "Voyages", icon: "route", covers: ["voyages", "voyage"] },
+  { kind: "openspace", label: "Open space", icon: "allocate", covers: ["openspace"] },
   { kind: "memory", label: "Memory", icon: "memory", covers: ["memory"] },
 ];
 
@@ -105,6 +108,10 @@ export default function App() {
             onPlanAgain={(id, order) => setView({ kind: "planner", id, order })} />
         )}
         {view.kind === "memory" && <Memory />}
+        {view.kind === "openspace" && (
+          <OpenSpace onPlan={(id, order) => setView({ kind: "planner", id, order })}
+            onOpenVoyage={(id) => setView({ kind: "voyage", id })} />
+        )}
       </main>
     </div>
   );

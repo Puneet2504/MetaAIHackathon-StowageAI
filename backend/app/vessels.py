@@ -37,8 +37,17 @@ def get(vessel_id: str, user: str | None = None) -> dict | None:
     if user:
         path = _user_path(user, vessel_id)
         if path and path.exists():
-            return json.loads(path.read_text(encoding="utf-8"))
-    return load_all().get(vessel_id)
+            return _with_strength(json.loads(path.read_text(encoding="utf-8")))
+    v = load_all().get(vessel_id)
+    return _with_strength(v) if v else None
+
+
+def _with_strength(v: dict) -> dict:
+    """Ships saved before strength limits existed get them on read (not saved), so every ship is checked."""
+    if not (v.get("strength") or {}).get("readingPoints"):
+        from .vessel_builder import strength_for  # imported here: the builder imports the schemas that use this module
+        v = {**v, "strength": strength_for(v)}
+    return v
 
 
 def is_owned(vessel_id: str, user: str) -> bool:
