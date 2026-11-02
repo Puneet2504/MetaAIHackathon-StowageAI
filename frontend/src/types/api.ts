@@ -305,6 +305,8 @@ export interface BallastPreview {
   trim_after: number;
   draught_fwd_m?: number;
   draught_aft_m?: number;
+  draught_fwd_before?: number;
+  draught_aft_before?: number;
   gm_m?: number;
   max_stress_pct?: number | null;
   passed?: boolean;

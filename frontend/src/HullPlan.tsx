@@ -8,11 +8,17 @@ export interface TankState {
   density?: number; // t/m3 from the plan, when it differs from the grade library
 }
 
+export interface BallastWater {
+  pct: number;
+  t: number;
+}
+
 interface Props {
   vessel: VesselModel;
   state: Record<string, TankState>;
   selected: string | null;
   onSelect: (id: string) => void;
+  ballast?: Record<string, BallastWater>;  // ballast mode: the water to take in, drawn on the ballast tanks
 }
 
 const W = 1000, H = 230, PAD_X = 30, PAD_Y = 30;
@@ -21,23 +27,26 @@ const LABEL_MIN_W = 34, LABEL_MIN_H = 22, FILL_MIN_H = 40;
 // Plan view, bow to the right, starboard at the bottom.
 // The hull is shaped around the ship's own tanks: the parallel body covers the cargo block,
 // the bow and stern taper only beyond it, and tanks are clipped to the outline.
-export default function HullPlan({ vessel, state, selected, onSelect }: Props) {
+export default function HullPlan({ vessel, state, selected, onSelect, ballast }: Props) {
   const clipId = `hull-clip-${useId().replace(/:/g, "")}`;
   const { lbp, breadth } = vessel.particulars;
   const loa = vessel.layout?.loa;
-  const drawn = vessel.tanks.filter((t) => ["cargo", "slop", "ballast"].includes(t.type) && t.side !== "C");
+  // Centre ballast tanks (the forepeak) are drawn only in ballast mode, so the cargo view stays as it is.
+  const drawn = vessel.tanks.filter((t) => ["cargo", "slop", "ballast"].includes(t.type)
+    && (t.side !== "C" || (ballast && t.type === "ballast")));
 
   // Length span: from the stern to the bow tip, including the overhangs past the perpendiculars.
   const overhang = loa && loa > lbp ? (loa - lbp) / 2 : lbp * 0.03;
-  const aftMost = Math.min(0, ...drawn.map((t) => t.xAft));
-  const fwdMost = Math.max(lbp, ...drawn.map((t) => t.xFwd));
+  const shaped = drawn.filter((t) => t.side !== "C");
+  const aftMost = Math.min(0, ...shaped.map((t) => t.xAft));
+  const fwdMost = Math.max(lbp, ...shaped.map((t) => t.xFwd));
   const xs = aftMost - overhang, xe = fwdMost + overhang;
   const sx = (x: number) => PAD_X + ((x - xs) / (xe - xs)) * (W - 2 * PAD_X);
   const sy = (y: number) => H / 2 + (y / (breadth / 2)) * (H / 2 - PAD_Y);
 
   // Parallel body: from the aft end of the first tank to the forward end of the cargo block.
   const cargo = drawn.filter((t) => t.type === "cargo");
-  const bodyAft = Math.min(lbp * 0.15, ...(drawn.length ? drawn.map((t) => t.xAft) : [lbp * 0.15]));
+  const bodyAft = Math.min(lbp * 0.15, ...(shaped.length ? shaped.map((t) => t.xAft) : [lbp * 0.15]));
   const sternStart = Math.max(xs + (xe - xs) * 0.04, bodyAft);
   const cargoFwd = cargo.length ? Math.max(...cargo.map((t) => t.xFwd)) : lbp * 0.86;
   const bowStart = Math.min(Math.max(lbp * 0.8, cargoFwd - (xe - xs) * 0.01), xe - (xe - xs) * 0.08);
@@ -54,14 +63,16 @@ export default function HullPlan({ vessel, state, selected, onSelect }: Props) {
   ].join(" ");
 
   // Accommodation over the engine room, only where no tank is.
-  const firstTank = drawn.length ? Math.min(...drawn.map((t) => t.xAft)) : lbp * 0.15;
+  const firstTank = shaped.length ? Math.min(...shaped.map((t) => t.xAft)) : lbp * 0.15;
   const houseAft = xs + (xe - xs) * 0.015, houseFwd = firstTank - (xe - xs) * 0.008;
   const showHouse = houseFwd - houseAft >= (xe - xs) * 0.04;
 
   const tcgOf = (t: Tank) => t.soundingTable[t.soundingTable.length - 1].tcg;
   const yRange = (t: Tank): [number, number] => {
     const tcg = tcgOf(t);
-    if (t.type === "ballast" && t.side !== "C") return [Math.abs(tcg) - 1, Math.abs(tcg) + 1].map((v) => v * Math.sign(tcg)) as [number, number];
+    const strip = ballast ? 1.6 : 1;
+    if (t.type === "ballast" && t.side === "C") return [-half * 0.45, half * 0.45];
+    if (t.type === "ballast") return [Math.abs(tcg) - strip, Math.abs(tcg) + strip].map((v) => v * Math.sign(tcg)) as [number, number];
     return tcg >= 0 ? [0, 2 * tcg] : [2 * tcg, 0];
   };
 
@@ -104,18 +115,20 @@ export default function HullPlan({ vessel, state, selected, onSelect }: Props) {
           const grade = gradeById(s?.grade ?? null);
           const isCargo = t.type !== "ballast";
           const fill = s?.fillPct ?? 0;
+          const water = !isCargo ? ballast?.[t.id] : undefined;
           const showId = isCargo && w >= LABEL_MIN_W && h >= LABEL_MIN_H;
           const showFill = showId && h >= FILL_MIN_H;
           const font = Math.max(10, Math.min(13, w / 5.2));
           const onFill = grade && fill >= 60 ? "on-fill" : "";
           return (
-            <g key={t.id} className={`tank ${isCargo ? "cargo" : "ballast"} ${selected === t.id ? "selected" : ""}`}
+            <g key={t.id} className={`tank ${isCargo ? "cargo" : "ballast"} ${water ? "takes-water" : ""} ${selected === t.id ? "selected" : ""}`}
               onClick={() => isCargo && onSelect(t.id)}
               role={isCargo ? "button" : undefined}
               tabIndex={isCargo ? 0 : undefined}
               onKeyDown={(e) => { if (isCargo && (e.key === "Enter" || e.key === " ")) onSelect(t.id); }}
               aria-label={isCargo ? `${t.name}, ${grade ? grade.name : "empty"}, ${fill}% full` : undefined}>
-              <title>{`${t.id} · ${t.type}${isCargo ? ` · ${grade ? `${grade.name} ${fill}%` : "empty"}` : ""}`}</title>
+              <title>{`${t.id} · ${t.type}${isCargo ? ` · ${grade ? `${grade.name} ${fill}%` : "empty"}`
+                : water ? ` · ${water.t.toLocaleString()} t · ${water.pct}%` : ""}`}</title>
               <rect x={x + 1.5} y={y + 1.5} width={Math.max(w - 3, 0)} height={Math.max(h - 3, 0)} rx={isCargo ? 4 : 2} className="tank-shell" />
               {grade && fill > 0 && (() => {
                 // Liquid level: the filled part rises from the tank's outboard side.
@@ -127,6 +140,12 @@ export default function HullPlan({ vessel, state, selected, onSelect }: Props) {
                     <rect x={x + 1.5} y={ly} width={Math.max(w - 3, 0)} height={lh} rx={4} style={{ fill: grade.color }} />
                   </g>
                 );
+              })()}
+              {water && water.pct > 0 && (() => {
+                // Ballast water rises from the outboard side; a centre tank fills from both sides alike.
+                const lh = (h - 3) * Math.min(water.pct, 100) / 100;
+                const ly = t.side === "S" ? y + h - 1.5 - lh : t.side === "C" ? y + (h - lh) / 2 : y + 1.5;
+                return <rect x={x + 1.5} y={ly} width={Math.max(w - 3, 0)} height={lh} rx={2} className="tank-water" />;
               })()}
               {showId && (
                 <text x={x + w / 2} y={y + h / 2 + (showFill ? -6 : font / 3)} className={`tank-id ${onFill}`}

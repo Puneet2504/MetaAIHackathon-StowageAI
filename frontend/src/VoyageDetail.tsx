@@ -151,12 +151,12 @@ export default function VoyageDetail({ id, onBack, onPlanAgain }: Props) {
             <>
               <p className="muted small">Condition on leaving {stage.port}, after discharging {stage.discharged.join(", ") || "cargo"} and
                 loading {stage.allocation.map((a) => a.grade).join(", ")}.</p>
-              {stage.result ? <StabilityPanel result={stage.result} /> : <p className="error">{stage.message}</p>}
+              {stage.result ? <StabilityPanel result={stage.result} vessel={v.vessel} cargo={state} /> : <p className="error">{stage.message}</p>}
             </>
-          ) : v.plan.result ? <StabilityPanel result={v.plan.result} /> : <p className="muted">No stability result stored.</p>}
+          ) : v.plan.result ? <StabilityPanel result={v.plan.result} vessel={v.vessel} cargo={state} /> : <p className="muted">No stability result stored.</p>}
         </section>
       </div>
-      {v.plan.voyage_check && <VoyageCheck report={v.plan.voyage_check} />}
+      {v.plan.voyage_check && <VoyageCheck report={v.plan.voyage_check} vessel={v.vessel} />}
       {v.plan.cleaning && <Cleaning report={v.plan.cleaning} />}
     </>
   );

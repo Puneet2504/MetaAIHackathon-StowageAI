@@ -26,6 +26,8 @@
   --sea-1: #dbe9f0;
   --sea-2: #c3d9e5;
   --sea-line: rgba(255, 255, 255, 0.55);
+  --water: #2a8fd0;
+  --water-soft: rgba(42, 143, 208, 0.22);
   --deck: #f8fafb;
   --house: #c9d6de;
   --shadow: 0 1px 2px rgba(15, 42, 61, 0.06), 0 6px 20px rgba(15, 42, 61, 0.07);
@@ -77,6 +79,8 @@
   --sea-1: #0f2f45;
   --sea-2: #0b2436;
   --sea-line: rgba(143, 179, 204, 0.18);
+  --water: #4aaef0;
+  --water-soft: rgba(74, 174, 240, 0.2);
   --deck: #18324a;
   --house: #2c4a63;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 20px rgba(0, 0, 0, 0.25);
@@ -234,6 +238,8 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); }
 .hull-centreline { stroke: var(--line); stroke-dasharray: 6 5; }
 .tank-shell { fill: var(--panel-2); stroke: var(--line); stroke-width: 1; }
 .tank.ballast .tank-shell { fill: var(--line); opacity: 0.55; }
+.tank.ballast.takes-water .tank-shell { fill: var(--water-soft); stroke: var(--water); stroke-width: 2; opacity: 1; }
+.tank-water { fill: var(--water); }
 .tank.cargo { cursor: pointer; }
 .tank.cargo:hover .tank-shell, .tank.selected .tank-shell { stroke: var(--ink); stroke-width: 2.5; }
 .tank-liquid rect { transition: height 0.4s ease, y 0.4s ease; }
@@ -246,7 +252,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); }
 
 /* ---------- planner ---------- */
 .columns { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 1.25rem; align-items: start; }
-@media (max-width: 860px) { .columns { grid-template-columns: 1fr; } }
+@media (max-width: 860px) { .columns { grid-template-columns: minmax(0, 1fr); } }
 .voyage { margin-bottom: 1.25rem; }
 .voyage h2 { margin-bottom: 0.25rem; }
 .stepper { list-style: none; display: flex; flex-wrap: wrap; gap: 0.25rem; padding: 0; margin: 0; }
@@ -350,7 +356,11 @@ tr.selected td { background: var(--accent-soft); }
 @media (max-width: 720px) {
   .appbar-inner { flex-wrap: wrap; }
   .tabs { order: 3; width: 100%; margin: 0.2rem 0 0; justify-content: space-between; }
-  .tab { flex: 1; justify-content: center; }
+  .tab { flex: 1 1 0; min-width: 0; justify-content: center; padding: 0.35rem 0.4rem; white-space: nowrap; }
+}
+@media (max-width: 420px) {
+  .tab { font-size: 0.875rem; gap: 0.25rem; }
+  .tab .icon { display: none; }
 }
 
 /* ---------- plain explanations ---------- */
@@ -512,6 +522,27 @@ input.estimated { border-color: var(--warn) !important; box-shadow: inset 0 0 0 
 /* Ballast preview and later additions. */
 .ballast-preview { border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 10px; padding: 0.55rem 0.75rem; margin: 0.6rem 0; background: var(--panel-2); }
 .ballast-preview.partial { border-left-color: var(--warn); }
+.ballast-layout { margin-top: 0.5rem; }
+.ballast-layout .plan { padding: 0; margin: 0.5rem 0 0; }
+.profile-wrap { overflow-x: auto; }
+.profile { width: 100%; min-width: 520px; display: block; }
+.profile-sky { fill: var(--panel); }
+.profile-sea { fill: var(--sea-2); opacity: 0.75; }
+.profile-hull { fill: var(--deck); stroke: var(--hull); stroke-width: 2.5; }
+.profile-cargo { fill: none; stroke: var(--line); stroke-dasharray: 4 3; }
+.profile-tank { fill: var(--panel-2); stroke: var(--line); }
+.profile-ballast.takes-water .profile-tank { fill: var(--water-soft); stroke: var(--water); stroke-width: 2; }
+.profile-label { font: 14px var(--body); fill: var(--ink); text-anchor: middle; pointer-events: none; }
+.profile-label.strong { font: 600 15px var(--display); }
+.profile-label.on-water { fill: #fff; }
+.waterline { stroke-width: 2; }
+.waterline.before { stroke: var(--ink); opacity: 0.55; stroke-dasharray: 7 5; }
+.waterline.after { stroke: var(--water); }
+.key-line { display: inline-block; width: 22px; height: 0; margin-right: 0.4rem; vertical-align: middle; border-top: 2px solid var(--water); }
+.key-line.before { border-top: 2px dashed var(--ink); opacity: 0.6; }
+.swatch.water { background: var(--water); }
 .ballast-head { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; margin: 0 0 0.3rem; }
 .amendments { margin-top: 0.6rem; }
 .amendments h3 { margin: 0 0 0.2rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.layout-details { margin-top: 0.4rem; }
+.layout-details summary { cursor: pointer; font-weight: 600; color: var(--accent); }

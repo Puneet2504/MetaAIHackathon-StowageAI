@@ -613,13 +613,13 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
             <>
               <p className="muted small">Condition on leaving {stage.port}, after discharging {stage.discharged.join(", ") || "cargo"} and
                 loading {stage.allocation.map((a) => a.grade).join(", ")}.</p>
-              {stage.result ? <StabilityPanel result={stage.result} /> : <p className="error">{stage.message}</p>}
+              {stage.result ? <StabilityPanel result={stage.result} vessel={vessel} cargo={hullState} /> : <p className="error">{stage.message}</p>}
               {stage.warnings.length > 0 && <ul className="warnings">{stage.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>}
             </>
           )}
           {result && !stage && (
             <>
-              <StabilityPanel result={result} />
+              <StabilityPanel result={result} vessel={vessel} cargo={hullState} />
               {!plan && result.warnings.length > 0 && (
                 <ul className="warnings">{result.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
               )}
@@ -633,9 +633,9 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
           )}
         </section>
       </div>
-      {p?.voyage_check && <VoyageCheck report={p.voyage_check} />}
+      {p?.voyage_check && <VoyageCheck report={p.voyage_check} vessel={vessel} />}
       {!plan && manualCheck && (
-        <VoyageCheck report={manualCheck} onApply={applySwaps} applying={applying}>
+        <VoyageCheck report={manualCheck} onApply={applySwaps} applying={applying} vessel={vessel}>
           {approved ? (
             <div className="approved-box">
               <p className="verdict pass"><Icon name="approve" size={20} /> Approved and saved as a voyage.</p>

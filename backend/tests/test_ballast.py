@@ -44,6 +44,9 @@ class PreviewTests(unittest.TestCase):
         self.assertTrue(p["reached"])
         self.assertTrue(ballast.TRIM_MIN <= p["trim_after"] <= ballast.TRIM_MAX)
         self.assertEqual(p["tanks"][0]["tank"], "FPT")  # the forepeak moves the trim most
+        base = calculate(VESSEL, loads)
+        self.assertAlmostEqual(p["draught_aft_before"] - p["draught_fwd_before"], base.trim_m, places=2)
+        self.assertLess(p["draught_aft_m"] - p["draught_fwd_m"], p["draught_aft_before"] - p["draught_fwd_before"])
 
     def test_no_preview_when_the_trim_is_already_normal(self):
         loads = cargo(1, 2)

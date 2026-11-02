@@ -1,11 +1,22 @@
+import BallastLayout from "./BallastLayout";
+import type { TankState } from "./HullPlan";
 import Icon from "./Icons";
 import type { BallastPreview as Preview } from "./types/api";
+import type { VesselModel } from "./types/vessel-model";
 
 // How much ballast water, in which tanks, brings the trim back to slightly by the stern (0.3-1.0 m).
 // A preview from the stability engine: it doesn't change the plan.
 const trim = (v: number) => `${Math.abs(v).toFixed(2)} m by the ${v >= 0 ? "stern" : "head"}`;
 
-export default function BallastPreview({ preview, title = "Ballast preview" }: { preview: Preview; title?: string }) {
+interface Props {
+  preview: Preview;
+  title?: string;
+  vessel?: VesselModel | null;           // when given: the ship drawn with the water to take in
+  cargo?: Record<string, TankState>;
+  openLayout?: boolean;
+}
+
+export default function BallastPreview({ preview, title = "Ballast preview", vessel, cargo, openLayout = false }: Props) {
   return (
     <div className={`ballast-preview ${preview.reached ? "reached" : "partial"}`}>
       <p className="ballast-head">
@@ -34,6 +45,12 @@ export default function BallastPreview({ preview, title = "Ballast preview" }: {
         </p>
       )}
       {preview.note && <p className="small warn-text">{preview.note}</p>}
+      {vessel && preview.tanks.length > 0 && (
+        <details className="layout-details" open={openLayout}>
+          <summary>Show on the ship</summary>
+          <BallastLayout vessel={vessel} preview={preview} cargo={cargo} />
+        </details>
+      )}
       <p className="muted small">Target 0.3–1.0 m by the stern. A preview only: it doesn't change the plan.</p>
     </div>
   );

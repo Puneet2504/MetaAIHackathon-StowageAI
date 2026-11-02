@@ -90,8 +90,9 @@ def preview(vessel: dict, loads: list[TankLoad]) -> dict | None:
         if in_band(best):
             break
 
+    before = {"draught_fwd_before": base.draught_fwd_m, "draught_aft_before": base.draught_aft_m}
     if not fill:
-        return {"tanks": [], "total_t": 0, "trim_before": round(t0, 2), "trim_after": round(t0, 2), "reached": False,
+        return {"tanks": [], "total_t": 0, "trim_before": round(t0, 2), "trim_after": round(t0, 2), "reached": False, **before,
                 "note": f"No ballast tank can move the trim {'aft' if need_stern else 'forward'} without breaking a limit."}
     tanks = {t["id"]: t for t in vessel["tanks"]}
     rows = [{"tank": tid, "m3": round(vol), "t": round(vol * rho), "pct": round(100 * vol / tanks[tid]["capacity100"])}
@@ -104,6 +105,6 @@ def preview(vessel: dict, loads: list[TankLoad]) -> dict | None:
             f"more {where} ballast would break a draught, stability or strength limit." if limited
             else f"all {where} ballast tanks are full. Move cargo {'aft' if need_stern else 'forward'} to correct the rest."))
     return {"tanks": rows, "total_t": sum(r["t"] for r in rows), "trim_before": round(t0, 2), "trim_after": round(best.trim_m, 2),
-            "draught_fwd_m": best.draught_fwd_m, "draught_aft_m": best.draught_aft_m, "gm_m": best.gm_fluid_m,
+            "draught_fwd_m": best.draught_fwd_m, "draught_aft_m": best.draught_aft_m, **before, "gm_m": best.gm_fluid_m,
             "max_stress_pct": max(best.max_sf_pct or 0, best.max_bm_pct or 0) if best.max_sf_pct is not None else None,
             "passed": best.all_passed, "reached": reached, "note": note}

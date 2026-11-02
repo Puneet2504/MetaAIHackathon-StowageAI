@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import BallastPreview from "./BallastPreview";
 import Icon from "./Icons";
 import type { VoyageCheckReport } from "./types/api";
+import type { VesselModel } from "./types/vessel-model";
 
 // The voyage followed port by port: pipelines, trapped cargo, and the ship's condition after each port.
 // The rules and swap search are code on the server; this card only shows the result.
@@ -10,11 +11,12 @@ interface Props {
   onApply?: () => void;   // apply the suggested swaps (hand-edited conditions only)
   applying?: boolean;
   children?: ReactNode;   // e.g. the approve button for a hand-edited condition
+  vessel?: VesselModel | null;  // draws the ballast previews on the ship
 }
 
 const pct = (v?: number | null) => (v == null ? "–" : `${Math.round(v)}%`);
 
-export default function VoyageCheck({ report, onApply, applying, children }: Props) {
+export default function VoyageCheck({ report, onApply, applying, children, vessel }: Props) {
   const blocking = report.issues.filter((i) => i.severity === "block");
   const warnings = report.issues.filter((i) => i.severity === "warn");
   const notes = report.issues.filter((i) => i.severity === "note");
@@ -50,7 +52,7 @@ export default function VoyageCheck({ report, onApply, applying, children }: Pro
       {report.ports.filter((p) => p.ballast).map((p) => (
         <details key={`b-${p.port}`} className="manual">
           <summary>Ballast preview leaving {p.port}</summary>
-          <BallastPreview preview={p.ballast!} title={`Leaving ${p.port}`} />
+          <BallastPreview preview={p.ballast!} title={`Leaving ${p.port}`} vessel={vessel} />
         </details>
       ))}
 

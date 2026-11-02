@@ -2,7 +2,9 @@ import BallastPreview from "./BallastPreview";
 import GzChart from "./GzChart";
 import Icon from "./Icons";
 import { CRITERION_MEANING, STAT_MEANING } from "./plainTerms";
+import type { TankState } from "./HullPlan";
 import type { StabilityResult } from "./types/api";
+import type { VesselModel } from "./types/vessel-model";
 
 function Stat({ icon, label, value, meaning, tone, title }: { icon: string; label: string; value: string; meaning: string;
   tone?: "warn" | "fail"; title?: string }) {
@@ -15,7 +17,8 @@ function Stat({ icon, label, value, meaning, tone, title }: { icon: string; labe
 }
 
 // Verdict, figures, GZ curve and criteria. Each figure and check has a one-line plain meaning.
-export default function StabilityPanel({ result }: { result: StabilityResult }) {
+export default function StabilityPanel({ result, vessel, cargo }: { result: StabilityResult; vessel?: VesselModel | null;
+  cargo?: Record<string, TankState> }) {
   const failed = result.criteria.filter((c) => !c.passed);
   const lean = result.list_deg;
   // Hull girder stress: peak shear force and bending moment, and where the bending peaks.
@@ -45,7 +48,7 @@ export default function StabilityPanel({ result }: { result: StabilityResult }) 
             title={`${STAT_MEANING.stress}${peak ? ` Bending peaks at ${peak.frame} (${peak.mode === "hog" ? "hogging" : "sagging"}).` : ""}`} />
         )}
       </dl>
-      {result.ballast && <BallastPreview preview={result.ballast} />}
+      {result.ballast && <BallastPreview preview={result.ballast} vessel={vessel} cargo={cargo} openLayout />}
       <GzChart angles={result.gz_curve.anglesDeg} gz={result.gz_curve.gzM} />
       <ul className="criteria">
         {result.criteria.map((c) => (
