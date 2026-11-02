@@ -1,6 +1,7 @@
 """FastAPI app. Start from the backend folder:  uvicorn app.main:app --reload"""
 import base64
 import re
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -27,6 +28,7 @@ app = FastAPI(title="Product Tanker Planner", version="0.3.0", lifespan=lifespan
 app.add_middleware(CORSMiddleware, allow_origins=[config.FRONTEND_ORIGIN],
                    allow_methods=["*"], allow_headers=["*"])
 
+log = logging.getLogger(__name__)
 IMAGE_RE = re.compile(r"^data:image/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$")
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
@@ -350,10 +352,16 @@ def read_drawing(body: ReadDrawingIn, user: str = Depends(current_user)):
             raise client.ModelNotConfigured(
                 "No model configured. Set MODEL_BASE_URL, MODEL_API_KEY and READER_MODEL_NAME in backend/.env")
         with usage.track(user):
-            segments = segment.segment(body.image) if body.image else []
+            # Segmentation only helps the reader find the tanks; if it fails, read the image on its own.
+            seg_note = []
+            try:
+                segments = segment.segment(body.image) if body.image else []
+            except client.ModelError as e:
+                log.warning("Segmentation skipped: %s", e)
+                segments, seg_note = [], ["Tank outlines couldn't be detected, so the drawing was read from the image alone."]
             out = tasks.read_drawing(body.text, body.image, segments)
-        return ReadDrawingOut(layout=out.layout, notes=out.notes, segments=segments, checks=out.checks, fixes=out.fixes,
-                              estimated=out.estimated)
+        return ReadDrawingOut(layout=out.layout, notes=seg_note + out.notes, segments=segments, checks=out.checks,
+                              fixes=out.fixes, estimated=out.estimated)
     except client.ModelNotConfigured as e:
         raise HTTPException(503, str(e))
     except client.ModelError as e:

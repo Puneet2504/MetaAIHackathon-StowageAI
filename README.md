@@ -63,15 +63,17 @@ cd frontend; npm run dev
 
 Stability checks work without a model. "Read order with AI" and "Explain with AI" need one.
 
-Once you're accepted and have access to the Meta Model API or an inference partner, edit `backend\.env`:
+Edit `backend\.env` with your Meta Model API key:
 
 ```
-MODEL_BASE_URL=...   # from your provider's docs
-MODEL_API_KEY=...
-MODEL_NAME=...
+MODEL_BASE_URL=https://api.meta.ai/v1
+MODEL_API_KEY=...                 # your own key
+MODEL_NAME=muse-spark-1.3         # or muse-wonder-1.0 for longer, harder tasks
+READER_MODEL_NAME=muse-spark-1.3  # reads ship drawings (text + image)
+SEGMENT_MODEL_NAME=sam-3.1        # optional: tank outlines from images
 ```
 
-`app/llm/client.py` sends a chat-completions style request to `{MODEL_BASE_URL}/chat/completions`. Check your provider's documentation and adjust `_post()` if its request format differs. Never commit `.env`.
+`app/llm/client.py` calls the Responses API (`POST {MODEL_BASE_URL}/responses`) as in Meta's docs. `app/llm/segment.py` calls SAM 3.1 through the same endpoint. Set `MODEL_API=chat` to use the OpenAI-compatible `/chat/completions` instead. Never commit `.env`.
 
 ## Demo login
 
@@ -94,10 +96,9 @@ Models (in `backend\.env`):
 READER_MODEL_NAME=...   # multimodal reader, e.g. Muse Spark or Muse Wonder (empty = MODEL_NAME)
 SEGMENT_MODEL_NAME=...  # SAM 3.1: segments hull and tanks in images; boxes are sent to the reader as hints
 SEGMENT_BASE_URL=...    # empty = MODEL_BASE_URL
-IMAGE_MODEL_NAME=...    # Muse Image, reserved for vessel sketches (not used yet)
 ```
 
-The SAM request shape in `app/llm/segment.py` is an assumption; check it against the Meta Model API docs. Before sending any drawing to a hosted model, confirm the endpoint's data region meets your data-residency policy.
+`app/llm/segment.py` calls SAM 3.1 (`sam-3.1`) through `POST /v1/responses` and reads the boxes from its reply; if it fails, the drawing is read from the image alone. Before sending any drawing to a hosted model, confirm the endpoint's data region meets your data-residency policy.
 
 ## What works now
 
@@ -116,7 +117,7 @@ The SAM request shape in `app/llm/segment.py` is an assumption; check it against
 3. Loading sequence view with a stage slider
 4. Shear force and bending moment checks
 5. Weather module (Open-Meteo marine forecast) with recommended speed and ETA range
-6. Vessel sketch from Muse Image; read capacity plans from images
+6. Read capacity plans from images
 7. Deploy, record the demo video, write the submission
 
 ## Voyages and memory

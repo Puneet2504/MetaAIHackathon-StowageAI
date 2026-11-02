@@ -15,6 +15,14 @@ GOOD = json.dumps({"parcels": [{"grade": "ULSD", "quantity_t": 1000}], "notes": 
 def reply(content: str):
     r = mock.Mock()
     r.raise_for_status.return_value = None
+    r.json.return_value = {"status": "completed", "output": [{"type": "message", "role": "assistant",
+                                                              "content": [{"type": "output_text", "text": content}]}]}
+    return r
+
+
+def chat_reply(content: str):
+    r = mock.Mock()
+    r.raise_for_status.return_value = None
     r.json.return_value = {"choices": [{"message": {"content": content}}]}
     return r
 
@@ -33,9 +41,10 @@ class ClientTests(unittest.TestCase):
         with mock.patch("app.llm.client.httpx.post", side_effect=[reply('{"parcels": "oops"}'), reply(GOOD)]) as post:
             out = client.chat_model("sys", "order", ParseOrderOut)
         self.assertEqual(out.parcels[0].quantity_t, 1000)
-        second = post.call_args_list[1].kwargs["json"]["messages"]
-        self.assertEqual([m["role"] for m in second], ["system", "user", "assistant", "user"])
-        self.assertIn("not valid", second[-1]["content"])
+        second = post.call_args_list[1].kwargs["json"]
+        self.assertEqual(second["instructions"], "sys")
+        self.assertEqual([m["role"] for m in second["input"]], ["user", "assistant", "user"])
+        self.assertIn("not valid", second["input"][-1]["content"])
 
     def test_two_invalid_replies_raise(self):
         with mock.patch("app.llm.client.httpx.post", side_effect=[reply("not json"), reply("still not")]):
@@ -50,19 +59,36 @@ class ClientTests(unittest.TestCase):
         with mock.patch.object(config, "MODEL_JSON_MODE", True), \
                 mock.patch("app.llm.client.httpx.post", return_value=reply(GOOD)) as post:
             client.chat_model("sys", "order", ParseOrderOut)
-        self.assertEqual(post.call_args.kwargs["json"]["response_format"], {"type": "json_object"})
+        self.assertEqual(post.call_args.kwargs["json"]["text"], {"format": {"type": "json_object"}})
 
     def test_json_mode_off_by_default(self):
         with mock.patch("app.llm.client.httpx.post", return_value=reply(GOOD)) as post:
             client.chat_model("sys", "order", ParseOrderOut)
-        self.assertNotIn("response_format", post.call_args.kwargs["json"])
+        self.assertNotIn("text", post.call_args.kwargs["json"])
 
     def test_image_is_sent_as_content_parts(self):
         with mock.patch("app.llm.client.httpx.post", return_value=reply(GOOD)) as post:
             client.chat_model("sys", "read", ParseOrderOut, image="data:image/png;base64,AAAA", model="reader")
         payload = post.call_args.kwargs["json"]
         self.assertEqual(payload["model"], "reader")
-        self.assertEqual([p["type"] for p in payload["messages"][1]["content"]], ["text", "image_url"])
+        self.assertEqual(payload["input"][0]["content"], [{"type": "input_text", "text": "read"},
+                                                          {"type": "input_image", "image_url": "data:image/png;base64,AAAA"}])
+
+    def test_request_follows_the_responses_api(self):
+        with mock.patch("app.llm.client.httpx.post", return_value=reply("Fine.")) as post:
+            client._post(client._messages("sys", "q"), max_tokens=500, effort="high", cache_reply=False)
+        self.assertTrue(post.call_args.args[0].endswith("/responses"))
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(payload["input"], [{"role": "user", "content": "q"}])
+        self.assertEqual(payload["max_output_tokens"], 500)
+        self.assertEqual(payload["reasoning"], {"effort": "high"})
+        self.assertNotIn("messages", payload)
+
+    def test_chat_completions_still_available(self):
+        with mock.patch.object(config, "MODEL_API", "chat"),                 mock.patch("app.llm.client.httpx.post", return_value=chat_reply("Fine.")) as post:
+            self.assertEqual(client.chat_text("sys", "q"), "Fine.")
+        self.assertTrue(post.call_args.args[0].endswith("/chat/completions"))
+        self.assertEqual([m["role"] for m in post.call_args.kwargs["json"]["messages"]], ["system", "user"])
 
     def test_text_reply_is_not_retried(self):
         with mock.patch("app.llm.client.httpx.post", return_value=reply(" Fine. ")) as post:
@@ -71,7 +97,7 @@ class ClientTests(unittest.TestCase):
 
 
 class FinishReasonTests(unittest.TestCase):
-    """A reply that hit the output cap (finish_reason=length) is an error: never returned, cached or counted."""
+    """A reply that hit the output cap (status incomplete) is an error: never returned, cached or counted."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -86,8 +112,10 @@ class FinishReasonTests(unittest.TestCase):
     def http(self, content, finish):
         r = mock.Mock()
         r.raise_for_status.return_value = None
-        r.json.return_value = {"choices": [{"message": {"content": content}, "finish_reason": finish}],
-                               "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
+        r.json.return_value = {"status": "completed" if finish == "stop" else "incomplete",
+                               "incomplete_details": None if finish == "stop" else {"reason": "max_output_tokens"},
+                               "output": [{"type": "message", "content": [{"type": "output_text", "text": content}]}],
+                               "usage": {"input_tokens": 10, "output_tokens": 5}}
         return r
 
     def cached(self) -> str:
@@ -99,7 +127,7 @@ class FinishReasonTests(unittest.TestCase):
                 mock.patch.object(usage, "record") as record:
             with self.assertRaises(client.ModelError) as e:
                 client.chat_text("sys", "user")
-        self.assertIn("finish_reason=length", str(e.exception))
+        self.assertIn("cut off (max_output_tokens)", str(e.exception))
         self.assertNotIn("Half a sent", self.cached())
         record.assert_not_called()
 

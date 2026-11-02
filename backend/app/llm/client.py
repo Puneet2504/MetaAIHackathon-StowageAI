@@ -1,8 +1,9 @@
-"""Provider-agnostic chat client.
+"""Model client for the Meta Model API (Muse Spark / Muse Wonder).
 
-Assumes an endpoint that accepts the widely used chat-completions request shape
-(POST {MODEL_BASE_URL}/chat/completions). Check your provider's docs once you have
-access to the Meta Model API or an inference partner, and adjust _post() if needed.
+Calls the Responses API (POST {MODEL_BASE_URL}/responses) as in Meta's docs: `instructions` for the system
+prompt, `input` for the conversation, `reasoning.effort`, `max_output_tokens`. Requests are built as chat
+messages internally (so cache keys don't depend on the wire format) and converted in _post(). Set
+MODEL_API=chat to use the OpenAI-compatible POST {MODEL_BASE_URL}/chat/completions instead.
 """
 import json
 import re
@@ -32,6 +33,61 @@ def _user_content(user: str, image: str | None):
     return [{"type": "text", "text": user}, {"type": "image_url", "image_url": {"url": image}}]
 
 
+def _responses_payload(messages: list[dict], model: str, temperature: float, json_mode: bool,
+                       max_tokens: int | None, effort: str | None) -> dict:
+    """Chat messages -> a Responses API request: the system prompt becomes `instructions`, images `input_image`."""
+    def part(p: dict) -> dict:
+        if p.get("type") == "image_url":
+            return {"type": "input_image", "image_url": p["image_url"]["url"]}
+        return {"type": "input_text", "text": p.get("text", "")}
+
+    system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
+    turns = [{"role": m["role"], "content": m["content"] if isinstance(m["content"], str) else [part(p) for p in m["content"]]}
+             for m in messages if m["role"] != "system"]
+    payload = {"model": model, "input": turns, "temperature": temperature}
+    if system:
+        payload["instructions"] = system
+    if max_tokens:
+        payload["max_output_tokens"] = max_tokens
+    if effort:
+        payload["reasoning"] = {"effort": effort}
+    if json_mode and config.MODEL_JSON_MODE:
+        payload["text"] = {"format": {"type": "json_object"}}
+    return payload
+
+
+def _responses_reply(body: dict) -> tuple[str, int, int]:
+    """Text, input tokens and output tokens from a Responses API reply. A reply cut off by the cap is an error."""
+    if body.get("status") == "incomplete":
+        why = (body.get("incomplete_details") or {}).get("reason", "incomplete")
+        raise ModelError(f"Model reply was cut off ({why})")
+    parts = [c.get("text", "") for item in body.get("output") or [] if isinstance(item, dict) and item.get("type") == "message"
+             for c in item.get("content") or [] if isinstance(c, dict) and c.get("type") == "output_text"]
+    text = "".join(parts) or body.get("output_text") or ""
+    u = body.get("usage") or {}
+    return text, u.get("input_tokens", 0), u.get("output_tokens", 0)
+
+
+def _chat_payload(messages: list[dict], model: str, temperature: float, json_mode: bool,
+                  max_tokens: int | None, effort: str | None) -> dict:
+    payload = {"model": model, "temperature": temperature, "messages": messages}
+    if max_tokens:
+        payload["max_tokens"] = max_tokens
+    if effort:
+        payload["reasoning_effort"] = effort
+    if json_mode and config.MODEL_JSON_MODE:
+        payload["response_format"] = {"type": "json_object"}
+    return payload
+
+
+def _chat_reply(body: dict) -> tuple[str, int, int]:
+    choice = body["choices"][0]
+    if choice.get("finish_reason") == "length":  # hit the output cap
+        raise ModelError("Model reply was cut off (max_output_tokens)")
+    u = body.get("usage") or {}
+    return choice["message"]["content"], u.get("prompt_tokens", 0), u.get("completion_tokens", 0)
+
+
 def _post(messages: list[dict], temperature: float = 0.0, model: str | None = None,
           json_mode: bool = False, max_tokens: int | None = None, effort: str | None = None,
           cache_reply: bool = True) -> str:
@@ -44,29 +100,21 @@ def _post(messages: list[dict], temperature: float = 0.0, model: str | None = No
     if (hit := cache.get(k)) is not None:
         usage.record(cache_hit=True)
         return hit
-    payload = {"model": model, "temperature": temperature, "messages": messages}
-    if max_tokens:
-        payload["max_tokens"] = max_tokens
-    if effort:
-        payload["reasoning_effort"] = effort
-    if json_mode and config.MODEL_JSON_MODE:
-        payload["response_format"] = {"type": "json_object"}
+    chat = config.MODEL_API == "chat"
+    build, read = (_chat_payload, _chat_reply) if chat else (_responses_payload, _responses_reply)
+    payload = build(messages, model, temperature, json_mode, max_tokens, effort)
     headers = {"Authorization": f"Bearer {config.MODEL_API_KEY}"}
     try:
-        r = httpx.post(f"{config.MODEL_BASE_URL}/chat/completions", json=payload,
+        r = httpx.post(f"{config.MODEL_BASE_URL}/{'chat/completions' if chat else 'responses'}", json=payload,
                        headers=headers, timeout=config.MODEL_TIMEOUT_S)
         r.raise_for_status()
-        body = r.json()
-        choice = body["choices"][0]
-        if choice.get("finish_reason") == "length":  # hit the output cap: never pass off or cache a partial reply
-            raise ModelError("Model reply was cut off (finish_reason=length)")
-        content = choice["message"]["content"]
+        # A reply cut off by the output cap raises here: never pass off or cache a partial reply.
+        content, tokens_in, tokens_out = read(r.json())
         if not content:
             raise ValueError("empty reply (output cap reached?)")
     except (httpx.HTTPError, KeyError, IndexError, ValueError) as e:
         raise ModelError(f"Model call failed: {e}") from e
-    u = body.get("usage") or {}
-    usage.record(u.get("prompt_tokens", 0), u.get("completion_tokens", 0), call=True)
+    usage.record(tokens_in, tokens_out, call=True)
     if not json_mode and cache_reply:
         cache.put(k, content)  # JSON replies are cached by chat_model once they validate
     return content

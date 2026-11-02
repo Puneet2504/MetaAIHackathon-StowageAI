@@ -30,8 +30,10 @@ CUT_OFF = "Verdict: Safe to sail.\nWhy:\n- It sits level, with sideways"
 def reply(content, prompt=100, completion=20, finish="stop"):
     r = mock.Mock()
     r.raise_for_status.return_value = None
-    r.json.return_value = {"choices": [{"message": {"content": content}, "finish_reason": finish}],
-                           "usage": {"prompt_tokens": prompt, "completion_tokens": completion}}
+    r.json.return_value = {"status": "completed" if finish == "stop" else "incomplete",
+                           "incomplete_details": None if finish == "stop" else {"reason": "max_output_tokens"},
+                           "output": [{"type": "message", "content": [{"type": "output_text", "text": content}]}],
+                           "usage": {"input_tokens": prompt, "output_tokens": completion}}
     return r
 
 
@@ -84,8 +86,8 @@ class TokenTests(unittest.TestCase):
         with mock.patch("app.llm.client.httpx.post", return_value=reply(EXPLANATION)) as post:
             tasks.explain(prompts.EXPLAIN_SYSTEM, DIGEST)
         payload = post.call_args.kwargs["json"]
-        self.assertEqual(payload["max_tokens"], config.MAX_TOKENS_EXPLAIN)
-        self.assertEqual(payload["reasoning_effort"], config.REASONING_EFFORT)
+        self.assertEqual(payload["max_output_tokens"], config.MAX_TOKENS_EXPLAIN)
+        self.assertEqual(payload["reasoning"], {"effort": config.REASONING_EFFORT})
 
     def test_usage_is_saved_per_user_per_day(self):
         with mock.patch("app.llm.client.httpx.post", return_value=reply(EXPLANATION, 120, 30)), usage.track("u1"):

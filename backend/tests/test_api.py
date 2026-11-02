@@ -84,6 +84,19 @@ class ApiTests(unittest.TestCase):
                         headers=self.h("alice"))
         self.assertEqual(r.status_code, 422)
 
+    def test_read_drawing_carries_on_when_segmentation_fails(self):
+        from app.llm import client, segment, tasks
+        from app.schemas import DrawingReadOut
+        read = DrawingReadOut(layout=LAYOUT, notes=["read from the image"])
+        with mock.patch.object(config, "model_configured", return_value=True), \
+             mock.patch.object(segment, "segment", side_effect=client.ModelError("Segmentation failed: 404")), \
+             mock.patch.object(tasks, "read_drawing", return_value=read) as reader:
+            r = self.c.post("/api/ai/read-drawing", json={"image": "data:image/png;base64,AAAA"}, headers=self.h("alice"))
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["segments"], [])
+        self.assertIn("image alone", r.json()["notes"][0])
+        self.assertEqual(reader.call_args.args[2], [])  # the reader still ran, without outlines
+
 
 if __name__ == "__main__":
     unittest.main()
