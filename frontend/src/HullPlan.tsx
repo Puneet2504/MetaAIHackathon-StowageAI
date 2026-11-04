@@ -117,7 +117,8 @@ export default function HullPlan({ vessel, state, selected, onSelect, ballast }:
           const fill = s?.fillPct ?? 0;
           const water = !isCargo ? ballast?.[t.id] : undefined;
           const showId = isCargo && w >= LABEL_MIN_W && h >= LABEL_MIN_H;
-          const showFill = showId && h >= FILL_MIN_H;
+          // In ballast mode without the condition's cargo, a tank's fill isn't known: show only its id.
+          const showFill = showId && h >= FILL_MIN_H && (!ballast || s !== undefined);
           const font = Math.max(10, Math.min(13, w / 5.2));
           const onFill = grade && fill >= 60 ? "on-fill" : "";
           return (

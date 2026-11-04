@@ -377,7 +377,7 @@ export default function Planner({ vesselId, onBack, onOpenVoyages, onOpenVoyage,
           </div>
         </div>
         <p className="badge" title={vessel.source.notes}>
-          {vessel.source.origin === "user_drawing" ? "Estimated hydrostatics." : "Synthetic demo data."} Not for real loading decisions.
+          {vessel.source.origin === "user_drawing" ? "Estimated hydrostatics." : "Synthetic demo data."}
         </p>
       </header>
 

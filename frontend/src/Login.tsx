@@ -109,7 +109,7 @@ export default function Login({ onSignedIn }: Props) {
                 {" "}with the password from the project's README.</span>
             </div>
           )}
-          <p className="muted small fineprint">Synthetic demo data only. Not for real loading decisions.</p>
+          <p className="muted small fineprint">Synthetic demo data only.</p>
         </form>
       </section>
     </div>
